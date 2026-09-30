@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "crates/hypg-core",
+    "crates/hypg-kem",
+    "crates/hypg-symm",
+    "crates/hypg-ds",
+    "crates/hypg-mt",
+    "crates/hypg-hash",
+    "crates/hypg-aead",
+    "crates/hypg-kat",
+    "crates/hypg-bench",
+    "crates/hypg-redteam",
+    "crates/hypg-cli",
+    "crates/hypg-lattice",
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.70.0"
+license = "GPL-3.0-or-later"
+repository = "https://example.invalid/hypg"
+homepage = "https://example.invalid/hypg"
+documentation = "https://example.invalid/hypg"
+
+[workspace.lints.rust]
+warnings = "deny"
+missing_docs = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+correctness = "deny"
+suspicious = "deny"
+perf = "deny"
+pedantic = "deny"
+redundant_clone = "deny"
+redundant_field_names = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

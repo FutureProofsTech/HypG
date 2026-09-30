@@ -1,0 +1,14 @@
+[package]
+name = "hypg-hash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG hashing pillar: hash/XOF/keyed-hash/KDF API over portable BLAKE3 (no_std, zero-dep, safe Rust)"
+autotests = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hypg-core = { path = "../hypg-core" }

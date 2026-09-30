@@ -1,0 +1,18 @@
+[package]
+name = "hypg-kat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG KAT harness: deterministic test-vector generation and cross-arch checks"
+publish = false
+
+[dependencies]
+hypg-core = { path = "../hypg-core" }
+hypg-hash = { path = "../hypg-hash" }
+hypg-kem = { path = "../hypg-kem" }
+hypg-symm = { path = "../hypg-symm" }
+hypg-ds = { path = "../hypg-ds" }
+
+[lints]
+workspace = true

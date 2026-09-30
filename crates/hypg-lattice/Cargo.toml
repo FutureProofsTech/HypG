@@ -1,0 +1,14 @@
+[package]
+name = "hypg-lattice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG local lattice lab: LLL validation, toy-LWE break, real-parameter gap analysis (std binary, zero-dep, floats confined to harness)"
+publish = false
+
+[dependencies]
+hypg-kem = { path = "../hypg-kem" }
+
+[lints]
+workspace = true

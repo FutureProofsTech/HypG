@@ -1,0 +1,18 @@
+[package]
+name = "hypg-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG bench + timing-smoke harness (std binary, zero-dep, not for release timing claims)"
+publish = false
+
+[dependencies]
+hypg-core = { path = "../hypg-core" }
+hypg-kem = { path = "../hypg-kem" }
+hypg-symm = { path = "../hypg-symm" }
+hypg-ds = { path = "../hypg-ds" }
+hypg-mt = { path = "../hypg-mt" }
+
+[lints]
+workspace = true

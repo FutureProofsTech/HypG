@@ -1,0 +1,14 @@
+[package]
+name = "hypg-symm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG symmetric pillar: ChaCha20 + keyed-BLAKE3 EtM AEAD (no_std, zero-dep, safe Rust)"
+autotests = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hypg-core = { path = "../hypg-core" }

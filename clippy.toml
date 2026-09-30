@@ -1,0 +1,6 @@
+# HypG platinum lint policy.
+# Core crates are `#![no_std]` + `#![forbid(unsafe_code)]` + zero dependencies.
+# This file only tunes dogmatic pedantic lints that conflict with
+# branchless / constant-time style (explicit wrapping ops, bitwise code).
+
+allow-mixed-uninlined-format-args = false

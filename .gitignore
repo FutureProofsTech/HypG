@@ -1,0 +1,21 @@
+# Rust build artifacts (gigabytes — never commit)
+target/
+
+# LaTeX build artifacts (PDFs are committed intentionally, except iacr.pdf)
+*.aux
+*.log
+*.toc
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# Held back from the push by owner request (submission file)
+papers/iacr.pdf
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store

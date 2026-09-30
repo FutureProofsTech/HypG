@@ -1,0 +1,14 @@
+[package]
+name = "hypg-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG core: non-abelian hyper-graph cellular automata primitive, branchless, no_std, zero-dep"
+autotests = false
+
+[lints]
+workspace = true
+
+[features]
+default = []

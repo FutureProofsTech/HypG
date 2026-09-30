@@ -1,0 +1,18 @@
+[package]
+name = "hypg-redteam"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG adversarial test harness: malleability, mismatch, extremes, binding, sampler stats, failure sweep (std binary, zero-dep)"
+publish = false
+
+[dependencies]
+hypg-aead = { path = "../hypg-aead" }
+hypg-core = { path = "../hypg-core" }
+hypg-kem = { path = "../hypg-kem" }
+hypg-symm = { path = "../hypg-symm" }
+hypg-ds = { path = "../hypg-ds" }
+
+[lints]
+workspace = true

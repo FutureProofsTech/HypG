@@ -1,0 +1,15 @@
+[package]
+name = "hypg-aead"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HypG AEAD streaming front: incremental EtM over ChaCha20 + keyed-BLAKE3, wire-identical to hypg-symm (no_std, zero-dep, safe Rust)"
+autotests = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hypg-core = { path = "../hypg-core" }
+hypg-symm = { path = "../hypg-symm" }

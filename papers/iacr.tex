@@ -1,0 +1,346 @@
+\documentclass[runningheads]{llncs}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\newtheorem{construction}{Construction}[section]
+
+\begin{document}
+
+\title{HypG: A Complete Post-Quantum Cryptographic Suite\\
+in Safe Rust}
+\titlerunning{HypG: A Post-Quantum Suite in Safe Rust}
+\author{Dimitar Luchev}
+\authorrunning{D. Luchev}
+\institute{Independent Researcher\\
+\email{futureproofs@proton.me}}
+\maketitle
+
+\begin{abstract}
+We present HypG v1.0, a from-scratch post-quantum cryptographic suite
+implemented in 100\% safe Rust with zero dependencies: a Module-LWE
+key-encapsulation mechanism at Kyber-512-class dimensions, BLAKE3-based
+hashing, ChaCha20 / keyed-BLAKE3 authenticated encryption in one-shot
+and streaming form, and stateless hash-based signatures of SLH shape.
+The suite's contributions are engineering ones: (i)~a single
+\texttt{no\_std} core serving all four pillars; (ii)~a streaming AEAD
+front proven byte-identical to its one-shot counterpart across
+adversarial chunkings, so existing test vectors cover both;
+(iii)~an exhaustive local assurance methodology --- 129 tests, 14
+adversarial suites, frozen known-answer vectors, Miri-clean
+interpreted execution, and a verified MSRV floor; and (iv)~honestly
+reported negative results, including a harmful PGO outcome and the
+rejection of custom symmetric designs.  We argue what such testing can
+establish (correctness, determinism, misuse behavior, timing posture)
+and, with equal care, what it cannot (bit-security, side-channel
+immunity), leaving the latter to estimators, laboratories, and
+independent review.
+\keywords{post-quantum cryptography \and Module-LWE \and KEM \and
+hash-based signatures \and authenticated encryption \and safe Rust \and
+implementation.}
+\end{abstract}
+
+%======================================================================
+\section{Introduction}
+
+The standardization of post-quantum primitives by NIST
+(ML-KEM~\cite{FIPS203}, ML-DSA~\cite{FIPS204}, SLH-DSA~\cite{FIPS205})
+settles \emph{which} algorithms to use, but not \emph{how} to build
+trustworthy systems from them.  Practitioners face a composition
+problem: a KEM, a signature scheme, an AEAD, and a hash function must
+coexist with consistent domain separation, uniform misuse behavior, and
+a testing story that covers their interactions --- while the
+implementation itself must resist the oldest failure modes in the
+field: memory unsafety, supply-chain compromise, nondeterminism across
+platforms, and silent leakage through timing.
+
+HypG is an experiment in taking all of these requirements seriously at
+once, in a single from-scratch codebase: 100\% safe Rust (no
+\texttt{unsafe}, mechanically enforced), zero dependencies (nothing
+upstream to compromise), \texttt{no\_std} cryptographic libraries
+(suitable for constrained targets), bit-exact determinism across
+x86-64 and AArch64, and frozen test vectors pinning every output byte.
+Version 1.0 freezes four pillars --- KEM, hashing, AEAD, signatures ---
+as a \emph{research prototype}: functionally complete and obsessively
+tested, but unaudited and explicitly not for deployment.
+
+\paragraph{Contributions.} Beyond the code itself, this paper contributes:
+(1)~the suite architecture, including the decision record for rejected
+designs (custom sponge, novel keystream permutation, truncated tags);
+(2)~the streaming-AEAD identity argument, reducing a second API to the
+already-vectored construction by testing rather than by proof;
+(3)~a reproducible local assurance methodology with measured results;
+(4)~negative results rarely published (a $\sim$2.6$\times$ PGO slowdown;
+a keystream-skipping bug caught by equivalence tests); and
+(5)~a precise statement of the assurance boundary --- what local
+evidence establishes and what necessarily remains external.
+
+\paragraph{Related work.} The KEM follows the Kyber line
+(Regev~\cite{Regev05}, Lyubashevsky--Peikert--Regev~\cite{LPR10},
+Langlois--St ultr\'e~\cite{LS15}, Bos \emph{et al.}~\cite{Kyber},
+FIPS~203~\cite{FIPS203}) with a power-of-two modulus deviation; the FO
+transform follows Fujisaki--Okamoto~\cite{FO13} in its modular
+form~\cite{HHK17}.  Signatures follow SPHINCS+~\cite{SPX} /
+SLH-DSA~\cite{FIPS205} structurally (FORS, WOTS+, XMSS hypertree;
+XMSS~\cite{XMSS}).  Symmetric choices are standards:
+BLAKE3~\cite{BLAKE3}, ChaCha20~\cite{ChaCha,RFC8439}, Encrypt-then-MAC
+composition~\cite{BN00}.  Hardness estimation belongs to the LWE
+estimator line~\cite{APS15}; timing methodology to
+\texttt{dudect}~\cite{dudect}.  HypG claims novelty in none of its
+primitives --- deliberately --- and positions itself as an
+implementation-and-assurance contribution in the spirit of verified and
+hardened cryptographic engineering.
+
+%======================================================================
+\section{Design principles}
+
+Five principles survived every review and are enforced mechanically:
+
+\begin{enumerate}
+\item \textbf{Standard primitives, used as designed.} No novel
+symmetric cryptography.  A prior from-scratch Keccak was retired for
+BLAKE3 with official test vectors; a duplex AEAD was rebuilt as
+Encrypt-then-MAC.  Custom-sponge and truncated-tag proposals were
+rejected: each would trade oracle-validated assurance for unanalyzed
+novelty, creating a cryptanalysis burden no local setup can discharge.
+\item \textbf{Zero supply-chain surface.} Zero dependencies
+(\texttt{cargo tree} shows workspace crates only; \texttt{cargo audit}
+clean), so there is nothing upstream to compromise.
+\item \textbf{Memory safety by construction.}
+\texttt{\#![forbid(unsafe\_code)]} in every library, CI-gated; Miri
+clean over core, symmetric, and KEM crates (\S\ref{sec:eval}).
+\item \textbf{Bit-exact determinism.} Same inputs yield same outputs on
+x86-64/AArch64, debug/release.  All serialization is explicitly
+little-endian (a CI gate forbids endian-dependent conversions); an
+s390x compile check plus the LE gate argue portability by construction.
+\item \textbf{Fail closed.} KEM decapsulation never errors (implicit
+rejection); AEAD failures return $\bot$ and erase tentative plaintext;
+the operator CLI separates usage errors (exit 2) from authentication
+failures (exit 3).
+\end{enumerate}
+
+%======================================================================
+\section{The KEM: Module-LWE with Fujisaki--Okamoto}
+\label{sec:kem}
+
+\paragraph{Parameters.} Ring $R_q = \mathbb{Z}_q[X]/(X^{256}+1)$,
+dimension $n = 256$, module rank $k = 2$ (lattice dimension 512),
+modulus $q = 2^{12} = 4096$, centered binomial noise $\eta = 2$,
+32-byte FO message at 1 bit/coefficient (spacing 2048, decode
+threshold 1024).  Sizes: $pk = ct = 800$~B, $sk = 864$~B, $ss = 32$~B.
+The power-of-two $q$ (vs.\ Kyber's 3329) is a documented deviation
+enabling branchless mask-only reduction without Barrett division.
+
+\begin{construction}[KeyGen]
+On seed $s \in \{0,1\}^{256}$: $\mathit{seed}_A \gets
+\mathrm{CAExpand}(s, \text{seed-a})$;
+$A \gets \mathrm{Uniform}(\mathit{seed}_A)^{2\times 2}$;
+$s,e \gets \mathrm{CBD}_2$; $b \gets As+e$;
+$pk \gets \mathit{seed}_A \,\|\, \mathrm{pack}_{12}(b)$;
+$\mathit{fake} \gets \mathrm{CAExpand}(s, \text{fake})$;
+$sk \gets s \,\|\, \mathit{fake} \,\|\, pk$.
+\end{construction}
+
+\begin{construction}[Encaps]
+On $(pk, m)$: $(r,e_1,e_2) \gets G(m,pk)$ via \texttt{CA-PRF};
+$c_1 \gets A^T r + e_1$, $c_2 \gets b^T r + e_2 + \mathrm{Encode}(m)$;
+$ct \gets \mathrm{pack}_{10}(c_1) \,\|\, \mathrm{pack}_5(c_2)$;
+$ss \gets \mathrm{KDF}(m \,\|\, ct \,\|\, H(pk))$.
+\end{construction}
+
+\begin{construction}[Decaps]
+Decrypt $v = c_2 - s^T c_1$, decode to $m'$; re-encrypt to $ct'$;
+$ok \gets [ct' = ct]$; return $\mathrm{select}(ok, ss(m'),
+ss_{\mathrm{rej}}(\mathit{fake}, ct))$ with a branchless select.
+\end{construction}
+
+ randomness is derived, never sampled: the caller supplies all entropy
+and every secret/error/matrix flows through the \texttt{CA-PRF}
+expander (32 branchless automaton rounds under an outer BLAKE3, uniform
+in the ROM) under distinct ASCII domains.
+
+\paragraph{Correctness.} The decode margin is analytic ($\pm 1024$
+against noise of standard deviation $\sim$50) and empirical:
+20000/20000 clean round-trips at maximum load (plus 100000 on identical
+lattice code pre-migration).  Malleability sweeps flip all 6400
+ciphertext bits with zero unchanged secrets; an $8\times8$
+key-mismatch matrix shows zero off-diagonal anomalies.
+
+\paragraph{Hardness discussion.} Dimensions target the Kyber-512 class
+($\sim$100+~bit classical hardness suggested, \textbf{unconfirmed}).
+Confirmation via the LWE estimator~\cite{APS15} (Sage) is the top
+backlog item; a local lattice lab validates the harness itself by
+breaking toy-LWE ($n=8$) with verified LLL while failing to scale, the
+expected healthy signature.
+
+%======================================================================
+\section{Symmetric components}
+\label{sec:symm}
+
+\paragraph{Hashing.} A thin API over portable BLAKE3: 32-byte hashes,
+64-byte XOF digests (first half equals the hash, by construction),
+keyed hashing, key derivation, expansion, and a streaming hasher proven
+equal to one-shot at every split pattern.  Empty/``abc''/XOF-64 anchors
+were cross-checked against third-party bindings at freeze time.
+
+\paragraph{AEAD.} IETF ChaCha20 encryption plus keyed BLAKE3 over
+$\mathit{nonce} \,\|\, ad \,\|\, ct \,\|\, \mathrm{le64} \,\|\,
+\mathrm{le64}$, with per-operation subkeys from BLAKE3
+\texttt{derive\_key}; 32-byte tags, verify-before-decrypt, $ct.len() =
+pt.len()$, streams below $2^{38}$~B.  The streaming front uses the
+\emph{identical} byte schedule --- same subkeys, MAC order, and counter
+sequence with cross-chunk partial-block buffering --- so every chunking
+emits the same bytes as one shot.  \emph{This identity is tested, not
+assumed}: equivalence holds across adversarial chunkings (including
+empty chunks, 1-byte heads, 20 PRNG split shapes, and 1\,MiB), letting
+existing vectors cover the streaming format with no new frozen files.
+The tests earned their keep: they caught a genuine keystream-skipping
+bug in development (counter restarted per chunk), fixed with cross-chunk
+block buffering.
+
+\paragraph{Performance (Intel i5-14400F, release).} Hash/streaming/XOF
+at 836/841/808\,MB/s; ChaCha20 at 752\,MB/s; AEAD seal/open at
+395\,MB/s (1\,MiB); KEM at 199/288/385\,$\mu$s; sign/verify at
+62\,ms/1.8\,ms (threaded: 12\,ms, byte-identical).
+
+%======================================================================
+\section{Signatures}
+
+Hedged $R \gets \mathrm{PRF}(sk.\mathrm{prf}, m)$; 64-byte streamed
+digest split into $30 \times 7$-bit FORS indices, a 60-bit tree index,
+and a 5-bit leaf.  FORS (30 trees of 128 leaves) signs the digest; a
+12-layer XMSS hypertree of WOTS+ chains ($w=16$, length 67, all 15
+steps always executed with branchless selection) authenticates the FORS
+key; reserved zero pads per layer are rejection-checked at verify
+(12/12 adversarial pad flips reject).  Sizes: $pk = 64$~B,
+$sk = 128$~B, $sig = 35456$~B.  Composition bounds are cited
+closed-form FORS/WOTS+/XMSS reductions; confirmation is auditor work.
+A scoped-thread signer parallelizes the 42 independent tree builds
+($\sim$5$\times$ faster, byte-identical); threading never enters the
+\texttt{no\_std} libraries.
+
+%======================================================================
+\section{Assurance methodology}
+\label{sec:eval}
+
+\paragraph{Correctness gates.} 129 tests pass on stable (debug and
+release) and on MSRV 1.70: 96 unit, 20 CLI failure-path integration,
+13 doc-tests.  Four frozen KAT files pin behavior byte-for-byte, with
+outputs identical across x86-64/AArch64 and debug/release, plus a
+1\,MB-stack run for embedded-shaped stacks.
+
+\paragraph{Adversarial suites (S1--S14).} Garbage robustness, full
+malleability, key-mismatch matrix, message extremes, FO binding,
+sampler statistics (524288 CBD coefficients, mean exactly 0),
+failure sweep, determinism, AEAD/DS forgery sweeps, a mega-suite
+(burst faults, tampered keys, garbage matrices, multi-sign, 1\,MiB
+AEAD), a 1011-case panic-freedom corpus, secret-key bit flips (which
+distinguished the spare-key design: fake-key corruption is invisible
+on the honest path but diverges the reject output), and streaming
+chunk games.  All pass at defaults and maximum load.
+
+\paragraph{Timing.} A Welch t-test over 10000 interleaved
+valid/tampered timings peaks at $|t| \approx 1.23$ (no signal;
+informational, not a proof).  \texttt{dudect}-grade study remains
+backlog by policy: the posture is structural (no secret branches),
+and the bench is a smoke signal, never evidence.
+
+\paragraph{Negative results.} Profile-guided optimization was measured
+harmful ($\sim$2.6$\times$ slowdown, reproduced across toolchains) and
+is documented as do-not-use; a batch-4 ChaCha auto-vectorization
+attempt measured zero gain and was reverted; AVX2/NEON intrinsics were
+rejected under \texttt{forbid(unsafe)} with the investigation record
+published.
+
+%======================================================================
+\section{Limits and threat model}
+\label{sec:limits}
+
+Explicitly \emph{not} claimed: confirmed bit-security, side-channel
+immunity beyond branchless timing posture, reduction of the
+\texttt{CA-PRF} heuristic, or any third-party review.  KAT vectors pin
+behavior, not security.  Residual risks accepted as documented, not
+resolved: the estimator run, laboratory side channels (power/EM/fault),
+and human audit --- none achievable on the development machine, by
+construction of the evidence classes involved.  What v1.0 certifies is
+\emph{process completeness}: everything checkable locally is checked
+and gated.
+
+%======================================================================
+\section{Conclusion}
+
+HypG demonstrates that a complete post-quantum suite can be built from
+scratch in safe Rust with zero dependencies, frozen deterministically,
+and tested to the limit of what one machine can check --- while stating
+plainly where that limit lies.  The code, vectors, measurements, and
+gates are reproducible; the remaining work belongs to estimators,
+laboratories, and independent reviewers, whose prompts are prepared in
+the repository's audit documentation.
+
+%======================================================================
+\begin{thebibliography}{99}
+
+\bibitem{Regev05} O.~Regev.
+On lattices, learning with errors, random linear codes, and cryptography.
+In \emph{STOC}, 2005. Journal version in \emph{J.~ACM} 2009.
+
+\bibitem{LPR10} V.~Lyubashevsky, C.~Peikert, O.~Regev.
+On ideal lattices and learning with errors over rings.
+In \emph{EUROCRYPT}, 2010.
+
+\bibitem{LS15} A.~Langlois, D.~Stehl\'e.
+Worst-case to average-case reductions for module lattices.
+\emph{Designs, Codes and Cryptography}, 2015.
+
+\bibitem{Kyber} J.~Bos \emph{et al.} (CRYSTALS-Kyber team).
+CRYSTALS-Kyber: algorithm specifications and supporting documentation
+(NIST PQC Round 3), 2021.
+
+\bibitem{FIPS203} NIST. FIPS 203: Module-Lattice-Based Key-Encapsulation
+Mechanism Standard (ML-KEM), 2024.
+
+\bibitem{FIPS204} NIST. FIPS 204: Module-Lattice-Based Digital Signature
+Standard (ML-DSA), 2024.
+
+\bibitem{FIPS205} NIST. FIPS 205: Stateless Hash-Based Digital Signature
+Standard (SLH-DSA), 2024.
+
+\bibitem{FO13} E.~Fujisaki, T.~Okamoto.
+Secure integration of asymmetric and symmetric encryption schemes.
+\emph{J.~Cryptology}, 2013 (original 1999).
+
+\bibitem{HHK17} D.~Hofheinz, K.~H\"ovelmanns, E.~Kiltz.
+A modular analysis of the Fujisaki-Okamoto transformation.
+In \emph{TCC}, 2017.
+
+\bibitem{SPX} D.~J.~Bernstein \emph{et al.}
+The SPHINCS+ signature framework. In \emph{CCS}, 2019.
+
+\bibitem{XMSS} J.~Buchmann, E.~Dahmen, A.~H\"ulsing.
+XMSS --- a practical forward secure signature scheme based on minimal
+security assumptions. In \emph{PQCrypto}, 2011.
+
+\bibitem{BLAKE3} J.~O'Connor \emph{et al.}
+BLAKE3: one function, fast everywhere. 2020.
+\url{https://github.com/BLAKE3-team/BLAKE3}.
+
+\bibitem{ChaCha} D.~J.~Bernstein.
+ChaCha, a variant of Salsa20. 2008.
+
+\bibitem{RFC8439} Y.~Nir, A.~Langley.
+ChaCha20 and Poly1305 for IETF protocols. RFC~8439, 2018.
+
+\bibitem{BN00} M.~Bellare, C.~Namprempre.
+Authenticated encryption: relations among notions and analysis of the
+generic composition paradigm. In \emph{ASIACRYPT}, 2000.
+
+\bibitem{APS15} M.~R.~Albrecht, R.~Player, S.~Scott.
+On the concrete hardness of Learning with Errors.
+\emph{J.~Mathematical Cryptology}, 2015 (the LWE estimator).
+
+\bibitem{dudect} O.~Reparaz, J.~Balasch, I.~Verbauwhede.
+Dude, is my code constant time? In \emph{DATE}, 2017.
+
+\end{thebibliography}
+
+\end{document}

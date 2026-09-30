@@ -1,0 +1,173 @@
+name: hypg-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  platinum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy, rust-src
+          targets: aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl, wasm32-unknown-unknown, s390x-unknown-linux-gnu
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy (deny warnings + pedantic workspace lints)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: tests
+        run: cargo test --workspace --locked
+      - name: tests under x86-64-v3 (AVX2 codegen coverage)
+        env:
+          RUSTFLAGS: "-C target-cpu=x86-64-v3"
+        run: cargo test -p hypg-core -p hypg-kem -p hypg-symm -p hypg-ds -p hypg-hash -p hypg-aead -p hypg-mt --lib --locked
+      - name: kat snapshot
+        run: cargo run -p hypg-kat
+      - name: kat frozen-file gate (covered by cargo test, explicit re-check)
+        run: cargo test -p hypg-kat --lib --locked
+      - name: bench + timing smoke
+        run: HYPG_BENCH_ITERS=8 cargo run -p hypg-bench
+      - name: red-team harness
+        run: cargo run -p hypg-redteam
+      - name: lattice lab
+        run: cargo run -p hypg-lattice
+      - name: cli round-trip smoke
+        run: |
+          set -euo pipefail
+          cargo build -p hypg-cli
+          SEED=$(python3 -c "print('42'*32)")
+          PK=$(./target/debug/hypg-cli keygen --seed "$SEED" | grep -oP '(?<=pk=)[0-9a-f]+')
+          SK=$(./target/debug/hypg-cli keygen --seed "$SEED" | grep -oP '(?<=sk=)[0-9a-f]+')
+          ENC=$(./target/debug/hypg-cli encaps "$PK" --coins "$SEED")
+          CT=$(echo "$ENC" | grep -oP '(?<=ct=)[0-9a-f]+')
+          SS1=$(echo "$ENC" | grep -oP '(?<=ss=)[0-9a-f]+')
+          SS2=$(./target/debug/hypg-cli decaps "$SK" "$CT" | grep -oP '(?<=ss=)[0-9a-f]+')
+          test -n "$SS1" && test "$SS1" = "$SS2"
+          KEY=$(python3 -c "print('42'*32)")
+          NONCE=$(python3 -c "print('11'*12)")
+          SEALED=$(./target/debug/hypg-cli seal "$KEY" "$NONCE" 6164 7070)
+          SCT=$(echo "$SEALED" | grep -oP '(?<=ct=)[0-9a-f]+')
+          STAG=$(echo "$SEALED" | grep -oP '(?<=tag=)[0-9a-f]+')
+          PT=$(./target/debug/hypg-cli open "$KEY" "$NONCE" 6164 "$SCT" "$STAG" | grep -oP '(?<=pt=)[0-9a-f]+')
+          test "$PT" = "7070"
+          ESK=$(python3 -c "print('43'*32)")
+          DSPK=$(./target/debug/hypg-cli ds-keygen --esk "$ESK" | grep -oP '(?<=ds_pk=)[0-9a-f]+')
+          DSSK=$(./target/debug/hypg-cli ds-keygen --esk "$ESK" | grep -oP '(?<=ds_sk=)[0-9a-f]+')
+          DSSIG=$(./target/debug/hypg-cli ds-sign "$DSSK" 6164 | grep -oP '(?<=sig=)[0-9a-f]+')
+          ./target/debug/hypg-cli ds-verify "$DSPK" 6164 "$DSSIG" | grep -q "verify=ok"
+      - name: cross build (ARM64 bit-exact compile)
+        run: cargo build -p hypg-core -p hypg-kem -p hypg-symm -p hypg-ds -p hypg-hash -p hypg-aead --target aarch64-unknown-linux-gnu
+      - name: wasm32 build (no_std portability compile)
+        run: |
+          set -euo pipefail
+          cargo build -p hypg-core -p hypg-kem -p hypg-symm -p hypg-ds -p hypg-hash -p hypg-aead --target wasm32-unknown-unknown
+          if command -v node >/dev/null 2>&1 || command -v wasmtime >/dev/null 2>&1; then
+            echo "wasm runner present: manual runtime procedure in docs/testplan.md"
+          else
+            echo "no wasm runner: compile gate only (runtime stays manual, see docs/testplan.md)"
+          fi
+      - name: big-endian check (s390x compile + explicit-LE gate)
+        run: |
+          set -euo pipefail
+          cargo check -p hypg-core -p hypg-kem -p hypg-symm -p hypg-ds -p hypg-hash -p hypg-aead --target s390x-unknown-linux-gnu --locked
+          echo "--- explicit-LE gate (no ne_bytes/transmute in libs) ---"
+          ! grep -rnE "ne_bytes|transmute" crates/hypg-core/src crates/hypg-kem/src crates/hypg-symm/src crates/hypg-ds/src crates/hypg-hash/src crates/hypg-aead/src || (echo "endian-dependent conversion found" && exit 1)
+          echo "s390x check passed (runtime needs an s390x sysroot: manual, see docs/testplan.md)"
+      - name: small-stack run (1 MB, embedded-shaped stacks)
+        run: |
+          set -euo pipefail
+          cargo build -p hypg-kat -p hypg-redteam
+          ( ulimit -s 1024 && cargo run -q -p hypg-kat > /dev/null && echo "KAT under 1MB stack OK" )
+          ( ulimit -s 1024 && cargo run -q -p hypg-redteam | tail -n 2 )
+      - name: cross-arch runtime KAT (musl static + qemu if present)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+        run: |
+          set -euo pipefail
+          cargo build -p hypg-kat --target aarch64-unknown-linux-musl
+          cargo run -q -p hypg-kat > /tmp/kat_x64.txt
+          if command -v qemu-aarch64 >/dev/null 2>&1; then
+            qemu-aarch64 target/aarch64-unknown-linux-musl/debug/hypg-kat > /tmp/kat_arm64.txt
+            diff /tmp/kat_x64.txt /tmp/kat_arm64.txt && echo "KAT cross-arch identical"
+          else
+            echo "qemu-aarch64 absent: static binary built, runtime diff skipped"
+          fi
+      - name: forbid unsafe / heap / std in libs
+        run: |
+          set -euo pipefail
+          LIBS="crates/hypg-core/src crates/hypg-kem/src crates/hypg-symm/src crates/hypg-ds/src crates/hypg-hash/src crates/hypg-aead/src crates/hypg-mt/src crates/hypg-kat/src"
+          NOSTD="crates/hypg-core/src crates/hypg-kem/src crates/hypg-symm/src crates/hypg-ds/src crates/hypg-hash/src crates/hypg-aead/src"
+          echo "--- unsafe gate (code, not comments) ---"
+          ! grep -rnE "unsafe\s*(fn|trait|impl|\{|\(|code)" $LIBS || (echo "unsafe block found" && exit 1)
+          echo "--- panic-shape gate (no panic!/unreachable!/todo!/unimplemented!) ---"
+          ! grep -rnE "(panic!|unreachable!|todo!|unimplemented!)" $LIBS || (echo "panic shape found" && exit 1)
+          echo "--- unwrap/expect gate (all lib code incl. tests) ---"
+          ! grep -rnE "\.(unwrap|expect)\(" $LIBS || (echo "unwrap/expect found" && exit 1)
+          echo "--- Vec gate ---"
+          ! grep -rn "Vec<" $NOSTD || (echo "Vec found" && exit 1)
+          echo "--- heap-type gate (no Box/alloc/collections/String in no_std libs) ---"
+          ! grep -rnE "Box<|alloc::|collections::" $NOSTD || (echo "heap type found" && exit 1)
+          ! grep -rnw "String" $NOSTD || (echo "String found" && exit 1)
+          echo "--- std gate (libs only) ---"
+          ! grep -rn "use std::\|std::" $NOSTD || (echo "std found in no_std lib" && exit 1)
+          echo "gates passed"
+          echo "note: assert!/debug_assert! stay allowed (tests, const param"
+          echo "checks, documented internal invariants); hypg-mt/hypg-kat are"
+          echo "std crates where Vec/Box/String are legitimate."
+      - name: zero-dependency assertion
+        run: |
+          set -euo pipefail
+          # Every package in the resolve graph must be a workspace member.
+          # (Guards against an accidental external dependency; wiggle room: none.)
+          OUT=$(cargo tree --prefix none -e=no-dev)
+          test -n "$OUT" || (echo "cargo tree emitted nothing" && exit 1)
+          echo "$OUT" | awk 'NF{print $1}' | sort -u
+          if echo "$OUT" | awk 'NF{print $1}' | grep -v -x 'hypg-[a-z]*' | grep -q .; then
+            echo "non-workspace dependency found" && exit 1
+          fi
+          echo "zero-dep gate passed"
+      - name: docs
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+      - name: audit (RustSec advisory scan)
+        run: |
+          set -euo pipefail
+          # Vacuous with zero dependencies today; the gate exists so the
+          # first future dependency arrives with advisory checking already on.
+          cargo install cargo-audit --locked --quiet
+          cargo audit
+
+  msrv:
+    # The advertised floor (`rust-version = "1.70"`) is a tested claim,
+    # not a lint: the full suite must pass on the 1.70 toolchain.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.70"
+      - name: tests (MSRV 1.70)
+        run: cargo test --workspace --locked
+
+  release-gates:
+    # Debug-only CI misses overflow-behavior and codegen differences
+    # (release uses `panic = "abort"`, `lto = "fat"`); the full suite —
+    # unit + integration + doc-tests — must pass there too.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: tests (release)
+        run: cargo test --workspace --locked --release
+      - name: red-team harness (release, defaults)
+        run: cargo run --release -p hypg-redteam
+      - name: kat snapshot (release, must match frozen debug output)
+        run: |
+          set -euo pipefail
+          cargo run -q --release -p hypg-kat > /tmp/kat_release.txt
+          cargo run -q -p hypg-kat > /tmp/kat_debug.txt
+          diff /tmp/kat_debug.txt /tmp/kat_release.txt && echo "KAT debug/release identical"

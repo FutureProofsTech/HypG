@@ -1,0 +1,258 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black}
+\usepackage{amsthm}
+\newtheorem{defn}{Definition}[section]
+\newtheorem{prop}{Proposition}[section]
+
+\title{HypG: Formal Specification\\[0.5ex]
+\large Yellow Paper --- Normative Algorithms, Parameters, and Contracts (v1.0)}
+\author{HypG Project}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document normatively specifies HypG v1.0: parameters, algorithms,
+sizes, domain strings, API contracts, and test-vector inventory.  It is
+the frozen companion to the implementation; in case of divergence, the
+frozen KAT files decide.  Parameters are unchanged since v0.7
+(KEM/AEAD/hash) and v0.6 (signatures).  This paper makes no security
+claim --- see the White Paper and \texttt{docs/threat-model.md}.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{Notation and conventions}
+
+Bytes are octets; all multi-byte integers serialize little-endian
+(explicit \texttt{le} conversions everywhere; no native-endian
+operations exist in the libraries).  $\|$ denotes concatenation,
+$\oplus$ byte-wise xor.  Security parameter: 128-bit post-quantum
+target (stated goal, unconfirmed).  ``Public'' means attacker-visible
+(lengths, indices, counters); ``secret'' means key/message-derived.
+
+%======================================================================
+\section{Parameters}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Symbol & Value & Meaning \\
+\midrule
+$n$ & 256 & ring dimension, $R_q = \mathbb{Z}_q[X]/(X^{256}+1)$ \\
+$k$ & 2 & module rank (lattice dimension 512) \\
+$q$ & $2^{12} = 4096$ & cipher modulus (mask-only reduction) \\
+$\eta$ & 2 & CBD parameter, coefficients in $\{-2,\ldots,2\}$ \\
+$msg$ & 32 B & FO message (1 bit/coefficient encoding) \\
+$PK$ & 800 B & $\mathit{seed}_A(32) \,\|\, \mathrm{pack}_{12}(b)(768)$ \\
+$CT$ & 800 B & $\mathrm{pack}_{10}(c_1)(640) \,\|\, \mathrm{pack}_{5}(c_2)(160)$ \\
+$SK$ & 864 B & $\mathit{seed}(32) \,\|\, \mathit{fake}(32) \,\|\, pk(800)$ \\
+$SS$ & 32 B & shared secret \\
+$w$ & 16 & WOTS+ base; chains run all $w-1 = 15$ steps \\
+$\ell_{\mathrm{WOTS}}$ & 67 & $64$ message digits $+$ $3$ checksum digits \\
+$K_{\mathrm{FORS}}$ & 30 & FORS trees; leaves per tree $2^7 = 128$ \\
+$D, h$ & 12 layers $\times$ height 5 & hypertree ($60$-bit tree index) \\
+$SIG$ & 35456 B & $R(32) \,\|\, \mathrm{FORS}_{\times 30} \,\|\,
+\mathrm{layers}_{\times 12}$ \\
+$SIG_{pk}/SIG_{sk}$ & 64 / 128 B & DS public/secret keys \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{Core primitives}
+
+\begin{defn}[CA-PRF]
+$\mathrm{CAExpand}(\mathit{seed}, \mathit{domain}, L)$: 256-byte state
+from $\mathrm{XOF}(\mathit{seed} \,\|\, \mathit{domain} \,\|\,
+\text{``-init''})$, evolved through 32 branchless cellular-automaton
+rounds under a seed-derived rule, emitted as
+$\mathrm{KDF}(\mathit{state} \,\|\, \mathit{domain} \,\|\,
+\text{``-out''})[0..L]$.  Deterministic in its inputs.
+\end{defn}
+
+\begin{defn}[Hashing]
+BLAKE3 as specified by its designers: $\mathrm{H}_{32}$ (32 B),
+$\mathrm{XOF}$ (arbitrary length; first 32 output bytes equal
+$\mathrm{H}_{32}$), keyed hashing, and the reference
+\texttt{derive\_key} construction.  No HypG modification exists.
+\end{defn}
+
+\begin{defn}[Stream cipher]
+IETF ChaCha20 (RFC~8439 \S2): 32 B key, 12 B nonce, 32-bit block
+counter from 0, 64 B blocks.  Total input per $(\mathit{key},
+\mathit{nonce})$ is bounded by $2^{32}$ blocks ($2^{38}$ B); counter
+exhaustion fails closed and never wraps.
+\end{defn}
+
+%======================================================================
+\section{KEM}
+
+\begin{defn}[KeyGen]
+On $\mathit{seed} \in \{0,1\}^{256}$:
+$\mathit{seed}_A \gets \mathrm{CAExpand}(\mathit{seed},
+\text{seed-a})$;
+$A \gets \mathrm{Uniform}(\mathit{seed}_A)^{2 \times 2}$;
+$s, e \gets \mathrm{CBD}_2$ via \texttt{CA-PRF};
+$b \gets A s + e$;
+$pk \gets \mathit{seed}_A \,\|\, \mathrm{pack}_{12}(b)$;
+$\mathit{fake} \gets \mathrm{CAExpand}(\mathit{seed}, \text{fake})$;
+$sk \gets \mathit{seed} \,\|\, \mathit{fake} \,\|\, pk$.
+\end{defn}
+
+\begin{defn}[Encaps]
+On $(pk, m)$, $m \in \{0,1\}^{256}$ caller coins:
+$(r, e_1, e_2) \gets G(m, pk)$ (FO oracle via \texttt{CA-PRF});
+$c_1 \gets A^T r + e_1$, $c_2 \gets b^T r + e_2 + \mathrm{Encode}(m)$
+(1 bit/coefficient, spacing 2048);
+$ct \gets \mathrm{pack}_{10}(c_1) \,\|\, \mathrm{pack}_{5}(c_2)$;
+$ss \gets \mathrm{KDF}(m \,\|\, ct \,\|\, \mathrm{H}(pk))$.
+\end{defn}
+
+\begin{defn}[Decaps]
+Decrypt $v = c_2 - s^T c_1$, decode to $m'$; re-encrypt to $ct'$;
+$ok \gets [ct' = ct]$; return
+$\mathrm{ct\_select}(ok, ss(m'), ss_{\mathrm{rej}}(\mathit{fake}, ct))$.
+Never fails; wrong $ct$ yields the pseudorandom reject secret.
+\end{defn}
+
+\paragraph{Failure analysis.}
+Decode threshold $\pm 1024$ against noise of standard deviation
+$\sim$50: analytic margin $\approx$ $20\sigma$.  Empirically
+20000/20000 clean round-trips (plus 100000 pre-migration on identical
+lattice code).  The 32-trial unit test is a tripwire, not the argument.
+
+%======================================================================
+\section{Hash API}
+
+$\mathrm{hash32}$ / $\mathrm{hash64}$ (XOF-64, first half equals
+$\mathrm{hash32}$), $\mathrm{keyed32}$, $\mathrm{derive32}$,
+$\mathrm{expand}$ ($\mathrm{XOF}(\mathit{seed} \,\|\, \mathit{domain})$),
+$\mathrm{kdf}$ ($\mathrm{XOF}(\mathit{domain} \,\|\, \mathrm{parts})$),
+and a streaming hasher proven equal to one-shot at every split pattern.
+All lengths are public.
+
+%======================================================================
+\section{AEAD}
+
+\begin{defn}[One-shot seal/open]
+Subkeys $(k_e, k_m) \gets (\mathrm{derive}(\text{symm-enc}),
+\mathrm{derive}(\text{symm-mac}))$ from the 32 B master key.
+$ct \gets \mathrm{ChaCha}(k_e, \mathit{nonce}, 0, pt)$ (in place,
+$|ct| = |pt|$);
+$tag \gets \mathrm{KeyedBLAKE3}(k_m, \mathit{nonce} \,\|\, ad \,\|\,
+ct \,\|\, \mathrm{le64}(|ad|) \,\|\, \mathrm{le64}(|ct|))$.
+Open recomputes and full-scan compares the tag \emph{before}
+decrypting; mismatch (or length mismatch) returns $\bot$ leaving $pt$
+untouched (streaming: zeroized).
+\end{defn}
+
+\begin{prop}[Streaming identity]
+For every chunking of the same $(\mathit{key}, \mathit{nonce}, ad,
+\mathit{message})$, the streaming sealer emits the identical
+$(ct, tag)$ as one-shot seal: subkeys, MAC input order, and the
+ChaCha counter sequence (with cross-chunk partial-block buffering)
+coincide byte-for-byte.  Tested across adversarial chunkings
+including empty chunks (unit) and 20 PRNG split shapes plus 1\,MiB
+(redteam S14).
+\end{prop}
+
+Opener plaintext is \emph{tentative} until \texttt{finish} validates
+the tag (EtM consequence); validity holds only after \texttt{Some}.
+
+%======================================================================
+\section{Signatures}
+
+Hedged $R \gets \mathrm{PRF}(sk.\mathrm{prf}, m)$;
+$md \gets \mathrm{H}(R \,\|\, \mathit{pubseed} \,\|\, \mathit{root} \,\|\, m)$
+(64 B, streamed, counter-bound); split into 30 $\times$ 7-bit FORS
+indices, 60-bit tree index, 5-bit leaf.  FORS signs per-tree leaves;
+the hypertree climbs 12 XMSS layers (WOTS+ sign + auth path each);
+serialization is $R \,\|\, \mathrm{FORS}_{\times 30} \,\|\,
+\mathrm{layers}_{\times 12}$ with zeroed 8-byte reserved pads per
+layer, rejection-checked at verify.  Verify returns false on any
+malformation (length first).  Composition bounds are cited in
+\texttt{docs/spec-ds.md} \S6 (closed-form FORS/WOTS+/XMSS reductions);
+auditor must confirm on these exact numbers.
+
+%======================================================================
+\section{Domain registry (frozen)}
+
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+Domain (\texttt{HYP-G/v07/} prefix) & Purpose \\
+\midrule
+\texttt{seed-a} & KEM $\mathit{seed}_A$ \\
+\texttt{sec-s}, \texttt{sec-e} & KEM secret / error vectors \\
+\texttt{poly-a} & KEM matrix $A$ \\
+\texttt{rand-r}, \texttt{rand-e1}, \texttt{rand-e2} & FO randomness $G$ \\
+\texttt{fake} & implicit-rejection key \\
+\texttt{r-seed} & FO randomness seed \\
+\texttt{ss}, \texttt{reject} & shared-secret / rejection KDFs \\
+\texttt{symm-enc}, \texttt{symm-mac} & AEAD subkeys \\
+\texttt{ds-pubseed}, \texttt{ds-prf}, \texttt{ds-addrnd}, \texttt{ds-msghash} & DS derivations \\
+\texttt{kat} & hash-KAT sample only (never protocol use) \\
+\bottomrule
+\end{tabular}
+\end{center}
+Frozen rows are never edited; new domains require registry rows.
+\texttt{CA-PRF} \texttt{-init}/\texttt{-out} suffixes are mechanism,
+not registry.
+
+%======================================================================
+\section{Known-answer vectors}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+File & Contents & Anchors \\
+\midrule
+\texttt{kats/v0.7.0.txt} & KEM, 3 seeds & BLAKE3(``abc'') \\
+\texttt{kats-symm/v0.7.0.txt} & AEAD, 5 cases & empty/edge/1000 B \\
+\texttt{kats-ds/v0.7.0.txt} & DS, 2 seeds $\times$ 2 msgs & empty + 55 B \\
+\texttt{kats-hash/v0.7.0.txt} & hash32/64, keyed, derive & empty/abc/1025 B \\
+\bottomrule
+\end{tabular}
+\end{center}
+Byte-exact gates compare renderer output to these files; history
+(v0.4--v0.6) is retained.  Empty/abc/XOF-64 anchors were cross-checked
+against third-party BLAKE3 bindings at freeze time.
+
+%======================================================================
+\section{API and constant-time contracts}
+
+Public Rust API: \texttt{keygen/encaps/decaps} (+ key/ciphertext/secret
+types), \texttt{hash32/hash64/keyed32/derive32/expand/kdf/Hasher},
+\texttt{seal/open}, \texttt{StreamSealer/StreamOpener},
+\texttt{ds\_keygen/ds\_sign/ds\_verify}, \texttt{mt\_sign}.  All
+fallible APIs return \texttt{Option} (never panic); all loops have
+public bounds; no secret branches, indices, or early returns; lengths
+are public.  Debug renderings of key-holding types are redacted;
+\texttt{Drop} wipes reachable key material (best-effort under
+\texttt{forbid(unsafe)}).
+
+%======================================================================
+\section{Test matrix (summary)}
+
+129 tests (96 unit, 20 CLI failure-path integration, 13 doc-tests) on
+stable debug/release and MSRV 1.70; redteam S1--S14 (incl.\ full
+6400-bit malleability, 20000-trial failure sweep, 1011-case panic
+corpus, streaming games); lattice L1--L5; Miri clean (core/symm/KEM);
+Welch t-test max $|t| \approx 1.23$ at $n = 10000$ (informational).
+Full matrix: \texttt{docs/testplan.md}.
+
+\medskip
+\noindent\textit{License: GNU General Public License v3.0 or later.
+Design companion: the HypG White Paper.}
+
+\end{document}
