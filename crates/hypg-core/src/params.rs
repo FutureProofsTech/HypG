@@ -1,9 +1,10 @@
-//! Normative size and round parameters (`HypG` v0.4 draft).
+//! Normative size and round parameters (`HypG` v2.0 hardened profile).
 //!
 //! All sizes are fixed at compile time. No dynamic allocation.
-//! v0.4 keeps the v0.3 Module-LWE scale (`n = 256`, `k = 2`):
-//! Kyber-class (`~800 B`), deliberately relaxing the v0.1/v0.2 `<256 B`
-//! target in exchange for real post-quantum hardness.
+//! v2.0 raises the Module-LWE module rank to `k = 4` (dimension 1024),
+//! matching the NIST Category 5 *dimension* target while retaining the
+//! power-of-two modulus `q = 2^12` for branchless, mask-only reduction.
+//! This is a parameter-hardening change, not a security certification.
 
 /// Words in the automaton state: 32 × 8 B = 256 B flat array.
 pub const STATE_WORDS: usize = 32;
@@ -18,23 +19,23 @@ pub const ROUNDS: usize = 32;
 pub const SEED_LEN: usize = 32;
 /// Implicit-rejection fake key length.
 pub const FAKE_LEN: usize = 32;
-/// Public key length: `seed_a(32) || pack12(b_vec)(768)`.
-pub const PK_LEN: usize = 800;
-/// Ciphertext length: `pack10(c1_vec)(640) || pack5(c2)(160)`.
-pub const CT_LEN: usize = 800;
+/// Public key length: `seed_a(32) || pack12(b_vec)(1536)`.
+pub const PK_LEN: usize = 1568;
+/// Ciphertext length: `pack10(c1_vec)(1280) || pack5(c2)(160)`.
+pub const CT_LEN: usize = 1440;
 /// Shared secret length.
 pub const SS_LEN: usize = 32;
-/// Secret key length: `seed(32) || fake(32) || pk(800)`.
+/// Secret key length: `seed(32) || fake(32) || pk(1568)`.
 pub const SK_LEN: usize = SEED_LEN + FAKE_LEN + PK_LEN;
 
 /// Hash output length (BLAKE3-256).
 pub const HASH_LEN: usize = 32;
 
-// --- Module-LWE trapdoor parameters (v0.4, Kyber-class) ---
+// --- Module-LWE trapdoor parameters (v2.0, Category-5 dimensions) ---
 /// Ring dimension (power of two for `X^n+1`).
 pub const POLY_N: usize = 256;
-/// Module rank (`k = 2`, so lattice dimension `512`).
-pub const MODULE_K: usize = 2;
+/// Module rank (`k = 4`, so lattice dimension `1024`).
+pub const MODULE_K: usize = 4;
 /// Cipher modulus `q = 2^12` (power of two: mask-only reduction).
 pub const MOD_Q: u16 = 4096;
 /// `q` mask for branchless reduction.

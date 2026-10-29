@@ -179,8 +179,22 @@ impl Poly {
     }
 }
 
-/// Inner product `a·b = sum_i a[i]*b[i]` over `R_q` (module rank `k`
-/// handled by caller slices; this helper covers a fixed 2-vector).
+/// Inner product `a·b = sum_i a[i]*b[i]` over `R_q` for equal-length
+/// slices. The loop bound is public (module rank), never secret.
+#[must_use]
+pub fn dot(a: &[Poly], b: &[Poly]) -> Poly {
+    debug_assert_eq!(a.len(), b.len());
+    let mut acc = Poly::zero();
+    let mut i = 0usize;
+    while i < a.len() {
+        acc = acc.add(&a[i].mul(&b[i]));
+        i += 1;
+    }
+    acc
+}
+
+/// Fixed two-term inner product, retained for compatibility with the
+/// v1.x test harnesses. New code should use [`dot`].
 #[must_use]
 pub fn dot2(a0: &Poly, a1: &Poly, b0: &Poly, b1: &Poly) -> Poly {
     a0.mul(b0).add(&a1.mul(b1))

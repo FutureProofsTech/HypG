@@ -12,33 +12,33 @@ power/EM, human audit) live in `docs/estimator.md` / `docs/audit-prep.md`.
 | Unit (KEM) | round-trips, tamper/key rejection, determinism, encaps determinism, `sizes_ok` | `hypg-kem/src/lib.rs` | same as above |
 | Unit (AEAD) | sweep, tamper, `fits_block_space` edges, nonce-reuse doc, 256×1-byte exhaustive, `sizes_ok` | `hypg-symm/src/lib.rs` | same as above |
 | Unit (hash) | empty/`abc` oracles, XOF-64 prefix, streaming equivalence, keyed/derive separation, shapes, `sizes_ok` | `hypg-hash/src/lib.rs` | same as above |
-| Unit (DS) | addr/tweak/WOTS-checksum/`split`, XMSS 0/31, FORS 0/127, hypertree, round-trip, forgery, `sizes_ok` | `hypg-ds/src/**` | same as above |
+| Unit (DS) | addr/tweak/WOTS-checksum/`split`, XMSS 0/15, FORS 0/511, hypertree, round-trip, forgery, `sizes_ok` | `hypg-ds/src/**` | same as above |
 | Unit (mt) | serial equivalence, worker-count stability | `hypg-mt/src/lib.rs` | same as above (incl. v3) |
 | Integration (CLI) | 20 failure paths (exit 2 usage / 3 auth / 0 implicit-reject) | `hypg-cli/tests/` | `tests` (debug + release) |
-| Doc-tests (7) | `b3_hash`, KEM round-trip, seal/open + forgery, `ds_sign`, `mt_sign`, KAT renderers | doc comments | `tests` (debug + release) |
-| KAT frozen | byte-exact vs `kats*/v0.7.0.txt` (KEM, symm, DS, **hash**), cross-arch x86-64/AArch64, debug/release identical | `hypg-kat` | `kat snapshot`, `kat frozen-file gate`, cross-arch, release `kat snapshot` |
-| Redteam S1–S14 | garbage, malleability (head+tail, `all` = 6400 bits), mismatch, extremes, FO binding, sampler, failure sweep, determinism, AEAD, DS forgery, mega-suite, panic sweep, sk flips, streaming AEAD | `hypg-redteam` | `red-team harness`, release red-team, 1 MB-stack run |
+| Doc-tests (13) | `b3_hash`, KEM round-trip, seal/open + forgery, `ds_sign`, `mt_sign`, KAT renderers | doc comments | `tests` (debug + release) |
+| KAT frozen | byte-exact vs `kats*/v2.0.0.txt` (KEM, symm, DS, **hash**), cross-arch x86-64/AArch64, debug/release identical | `hypg-kat` | `kat snapshot`, `kat frozen-file gate`, cross-arch, release `kat snapshot` |
+| Redteam S1–S14 | garbage, malleability (head+tail, `all` = 11520 bits), mismatch, extremes, FO binding, sampler, failure sweep, determinism, AEAD, DS forgery, mega-suite, panic sweep, sk flips, streaming AEAD | `hypg-redteam` | `red-team harness`, release red-team, 1 MB-stack run |
 | Unit (AEAD stream) | chunk-split equivalence, tamper/truncate/swap/duplicate rejection, poison, empty, determinism | `hypg-aead/src/lib.rs` | same as above |
 | Lattice L1–L5 | LLL exactness, toy break, GH ratio, gap, live round-trip | `hypg-lattice` | `lattice lab` |
 | Bench | throughput, valid/forged median pairs (KEM/AEAD/DS), Welch sweep (`HYPG_BENCH_TTEST_N`), DS profiler | `hypg-bench` | `bench + timing smoke` |
 | Portability | aarch64 compile + qemu KAT diff, wasm32 compile, s390x `cargo check`, explicit-LE grep gate | CI | cross-build steps, LE gate |
 | Hygiene | fmt, clippy pedantic, unsafe/`panic!`/`unwrap`/`Vec`/heap-type/std gates, zero-dep assertion, `cargo audit`, docs | CI | gate steps |
-| MSRV | full 107-test suite on toolchain 1.70 | CI | `msrv` job |
-| Miri (weekly) | symm + kem libs UB-clean (DS excluded, rationale §3) | CI | `nightly-miri` workflow |
+| MSRV | full 129-test suite on toolchain 1.70 | CI | `msrv` job |
+| Miri (weekly) | core + symm + kem libs under the interpreter (DS excluded, rationale §3) | CI | `nightly-miri` workflow |
 
 ## 2. Per-release checklist (manual, ~15 min)
 
-- [ ] Size tables match code: KEM `pk = ct = 800`, `sk = 864`, `ss = 32`;
+- [ ] Size tables match code: KEM `pk = 1568`, `ct = 1440`, `sk = 1632`, `ss = 32`;
       AEAD `key = 32`, `nonce = 12`, `tag = 32`; DS `pk = 64`,
-      `sk = 128`, `sig = 35456` (`docs/spec*.md` vs `sizes_ok` tests).
+      `sk = 128`, `sig = 49992` (`docs/spec*.md` vs `sizes_ok` tests).
 - [ ] Domain registry (`docs/domains.md`) matches every `HYP-G/v07/*`
       literal in code (`grep -rhn "HYP-G/" crates/*/src | sort -u`).
 - [ ] Public API signatures match spec §API
       (`keygen/encaps/decaps`, `seal/open`, `ds_sign/ds_verify`,
       `mt_sign`, KAT renderers).
-- [ ] KAT files frozen and listed: `kats/v0.7.0.txt`,
-      `kats-symm/v0.7.0.txt`, `kats-ds/v0.7.0.txt`,
-      `kats-hash/v0.7.0.txt`.
+- [ ] KAT files frozen and listed: `kats/v2.0.0.txt`,
+      `kats-symm/v2.0.0.txt`, `kats-ds/v2.0.0.txt`,
+      `kats-hash/v2.0.0.txt`.
 - [ ] `docs/metrics.md` numbers re-recorded (bench release,
       t-test max `|t|`, redteam max-load counts, Miri/audit/MSRV status).
 - [ ] KAT coverage audit: every pillar must keep ≥2 distinct
@@ -54,19 +54,19 @@ power/EM, human audit) live in `docs/estimator.md` / `docs/audit-prep.md`.
 Max load (release, this PC):
 
 ```sh
-HYPG_REDTEAM_TRIALS=20000 HYPG_REDTEAM_FLIPS=800 cargo run -q --release -p hypg-redteam
-HYPG_REDTEAM_FLIPS=all cargo run -q --release -p hypg-redteam   # 6400-bit S2
+HYPG_REDTEAM_TRIALS=20000 HYPG_REDTEAM_FLIPS=all cargo run -q --release -p hypg-redteam
+HYPG_REDTEAM_FLIPS=all cargo run -q --release -p hypg-redteam   # 11520-bit S2
 HYPG_BENCH_TTEST_N=10000 HYPG_BENCH_ITERS=8 cargo run -q --release -p hypg-bench
 ```
 
-Miri (core only; KEM/DS too slow — documented, not attempted):
+Miri (library crates; KEM/DS too slow for a per-push run — documented):
 
 ```sh
 cargo +nightly miri test -p hypg-core --lib   # minutes
 cargo +nightly miri test -p hypg-symm --lib   # minutes
 cargo +nightly miri test -p hypg-kem --lib    # ~75 min locally; weekly CI
 # DS excluded: hypertree signing under Miri is hours-long; DS shares the
-# Miri-clean primitives and is covered by S10/S11/S12 redteam sweeps.
+# core/symm primitives and is covered by S10/S11/S12 redteam sweeps.
 ```
 
 wasm runtime (needs a runner; compile gate is in CI):

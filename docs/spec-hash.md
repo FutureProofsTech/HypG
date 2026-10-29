@@ -1,6 +1,6 @@
 # HypG-Hash v0.7 Normative Spec (hashing pillar)
 
-Status: **FROZEN for 1.0**.
+Status: **FROZEN for 2.0**.
 Platinum: `no_std`, zero dependencies, bit-exact LE.
 
 ## 0. Position: no new cryptography
@@ -40,7 +40,7 @@ reveals input). Keyed hashing and derivation require 32 B uniform keys
 
 ## 3. Vectors
 
-`crates/hypg-kat/kats-hash/v0.7.0.txt` (byte-exact gate
+`crates/hypg-kat/kats-hash/v2.0.0.txt` (byte-exact gate
 `hash_kats_match_frozen_file`): empty/`abc`/1025-byte-pattern inputs
 × `hash32`/`hash64`, plus `keyed32` and `derive32` samples. The
 empty/`abc`/XOF-64 anchors were cross-checked against third-party

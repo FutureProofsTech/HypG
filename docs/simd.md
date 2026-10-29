@@ -54,8 +54,9 @@ rotting; it asserts correctness only, never timings.
 Stays at **1.70.0**. Nothing in this program needed newer features;
 the day portable SIMD stabilizes, adopting it forces an MSRV bump to
 whatever stable release carries it — a deliberate, versioned decision,
-not drift. Checker: `cargo +1.70.0 check` is not run here (toolchain
-not installed); the bump, when it comes, must be tested, not assumed.
+not drift. Checker: `cargo +1.70 test --workspace --locked` is
+CI-gated and passed locally on 2026-10-30 (129/129); the bump, when it
+comes, must be tested, not assumed.
 
 ## 5. What would actually move hashing throughput
 

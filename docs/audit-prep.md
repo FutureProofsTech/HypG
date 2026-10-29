@@ -1,4 +1,4 @@
-# Audit preparation (HypG v1.0, frozen)
+# Audit preparation (HypG v2.0, frozen)
 
 Scope for an external reviewer: everything needed to confirm or refute
 prototype readiness, nothing more.
@@ -38,7 +38,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked                      # 129 pass (see metrics.md)
 cargo test --workspace --locked --release
-cargo run -p hypg-kat            # must byte-match crates/hypg-kat/kats*/v0.7.0.txt (4 files)
+cargo run -p hypg-kat            # must byte-match crates/hypg-kat/kats*/v2.0.0.txt (4 files)
 HYPG_BENCH_ITERS=8 cargo run -p hypg-bench
 HYPG_BENCH_ITERS=8 HYPG_BENCH_TTEST_N=2000 cargo run -p hypg-bench  # 5-spot t-sweep
 cargo run -p hypg-redteam        # S1–S14
@@ -46,20 +46,20 @@ cargo run -p hypg-lattice
 cargo build -p hypg-core -p hypg-kem -p hypg-symm -p hypg-ds -p hypg-hash -p hypg-aead --target aarch64-unknown-linux-gnu
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo audit
-# local-only (nightly): cargo +nightly miri test -p hypg-symm --lib ; -p hypg-kem --lib (slow)
+# local-only (nightly): cargo +nightly miri test -p hypg-core --lib ; -p hypg-symm --lib ; -p hypg-kem --lib (slow)
 # MSRV floor: cargo +1.70 test --workspace --locked
 ```
 
-Cross-arch determinism — **done locally 2026-09-28**: musl static
+Cross-arch determinism — **v2.0 verified (2026-10-30)**: musl static
 `hypg-kat` under `qemu-aarch64` is byte-identical to x86-64
-(15457/15457 bytes). Reproduce:
+(234114/234114 bytes). Reproduce:
 `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld cargo build
 -p hypg-kat --target aarch64-unknown-linux-musl`, then diff
 `qemu-aarch64 target/aarch64-unknown-linux-musl/debug/hypg-kat`
 against the native run. (Requires the musl target + qemu, both present
 on the dev PC; CI builds the static binary and diffs when qemu exists.)
 
-Self-audit record, refreshed for the 1.0 freeze (2026-09-29): zero
+Self-audit record, refreshed for the 2.0 freeze (2026-10-30): zero
 `panic!`/`todo!`/`unreachable!` and zero `.unwrap()`/`.expect()` in
 all lib code including tests (CI-gated; only total `unwrap_or`
 fallbacks remain); zero `ne_bytes`/`transmute` (explicit-LE

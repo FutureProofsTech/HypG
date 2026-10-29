@@ -1,7 +1,7 @@
-# HypG-DS v0.6 Normative Spec (Phase C — implemented this release)
+# HypG-DS v2.0 Normative Spec (Category-5 dimensions)
 
-Status: **FROZEN for 1.0 (parameters v0.6, unchanged). Implemented,
-unreviewed prototype. Not for deployment.**
+Status: **FROZEN for 2.0 (parameters v2.0). Implemented, unreviewed
+research profile. Not for deployment.**
 Platinum: `no_std`, `forbid(unsafe_code)`, zero dependencies, bit-exact LE.
 
 ## 0. Construction: stateless hash-based signatures, SLH-DSA-shaped
@@ -15,15 +15,18 @@ closed-form FORS/WOTS+/XMSS reductions — no estimator needed.
 
 ## 1. Parameters (`n = 32`, BLAKE3-256 throughout)
 
-| Set | `h` | `d` | `h'` | FORS `(k,a)` | WOTS `w` | Est. sig | Sign cost |
+| Set | `h` | `d` | `h'` | FORS `(k,a)` | WOTS `w` | Sig | Sign cost |
 |---|---|---|---|---|---|---|---|
-| `HypG-DS-128s` (primary) | 60 | 12 | 5 | (30,7) | 16 | ≈ 34.6 KB | slower |
-| `HypG-DS-128f` (fast) | 60 | 20 | 3 | (26,7) | 16 | ≈ 50.4 KB | faster (bench decides) |
+| `HypG-DS-256f` (primary) | 68 | 17 | 4 | (35,9) | 16 | 49992 B | slower |
 
-Size derivation (primary): FORS sig `k·(a+1)·n = 30·8·32 = 7680 B`;
+The previous `HypG-DS-128s` profile (`h=60`, `d=12`, FORS `30×7`) is
+retained only in v1.0 KAT files as historical evidence. A fast profile
+is not implemented in v2.0.
+
+Size derivation: FORS sig `k·(a+1)·n = 35·10·32 = 11200 B`;
 WOTS+ `len1 = 64`, `len2 = 3`, `len = 67`, sig `67·32 = 2144 B`;
-XMSS layer sig ≈ `8` (idx) `+ 2144 + 5·32 = 2312 B`; hypertree
-`12 × 2312 = 27744 B`; total `7680 + 27744 + 32 (R) = 35456 B`.
+XMSS layer sig = `8` (idx) `+ 2144 + 4·32 = 2280 B`; hypertree
+`17 × 2280 = 38760 B`; total `32 (R) + 11200 + 38760 = 49992 B`.
 `pk = root(32) ‖ pubseed(32) = 64 B`;
 `sk = esk(32) ‖ prf(32) ‖ pubseed(32) ‖ root(32) = 128 B`.
 
@@ -78,15 +81,20 @@ inputs without indexing them.
 
 ## 6. Security position (honest)
 
-- Target 128-bit PQ from BLAKE3-256 collision/second-preimage resistance
-  plus FORS few-time-signature bounds per cited analyses, parameterized
-  above. Quantum margin follows 256-bit-output Grover assumptions (2^128 preimage).
+- Target NIST Category-5 dimensions using the SLH-DSA-256f shape:
+  256-bit hash output, `h = 68`, `d = 17`, `h' = 4`, FORS `(35,9)`,
+  WOTS+ `w = 16`. This matches the *parameters* of a Category-5
+  hash-based signature, not its assurance or review status.
+- BLAKE3-256 supplies 256-bit preimage resistance (128-bit under
+  Grover) and 128-bit classical collision resistance. FORS few-time-signature
+  bounds follow the cited closed-form analyses, parameterized above.
 - Auditor must confirm the `(h,d,k,a,w)` composition bound for our exact
   numbers — closed-form, checkable on paper, tracked as the DS review
   line (no Sage required).
-- Backlog at build time: KAT freeze, forgery redteam (S10), bench,
-  `hypg-cli sign/verify`, hypertree stack discipline (KB auth paths on
-  caller buffers, never `Vec`).
+- Backlog: independent review of the composition bound, side-channel
+  laboratory work, and a third-party audit. KAT freeze, forgery
+  red-team (S10), bench, and `hypg-cli sign/verify` are complete for
+  v2.0.
 
 ## 7. Explicit non-goals
 

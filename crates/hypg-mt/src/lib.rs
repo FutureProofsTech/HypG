@@ -2,7 +2,7 @@
 //!
 //! `mt_sign` computes byte-identical output to `hypg_ds::ds_sign` by
 //! running the independent tree builds on scoped threads:
-//! 12 XMSS layer builds + 30 FORS tree builds (the ~90% bulk), with the
+//! `D` XMSS layer builds + `FORS_K` FORS tree builds (the ~90% bulk), with the
 //! fast digest + serial assembly unchanged. See `docs/threading.md` for
 //! the model (`no_std` boundary, determinism argument, worker sizing).
 //!
@@ -11,16 +11,17 @@
 //! not a cryptographic primitive.
 
 use hypg_ds::fors::{fors_sign_one, fors_verify, ForsSig};
+use hypg_ds::params::{D, FORS_A, FORS_K, HP, LEAVES, WOTS_LEN};
 use hypg_ds::xmss::{xmss_build, xmss_sign_with_leaves, xmss_verify};
 use hypg_ds::{pre_sign, serialize_sig, LayerSig, PreSign, SigSk, SIG_LEN};
 
 /// One FORS tree signature unit: `(secret leaf, auth path)`.
-type ForsUnit = ([u8; 32], [[u8; 32]; 7]);
-/// One XMSS tree's 32 WOTS leaves.
-type XmssLeaves = [[u8; 32]; 32];
+type ForsUnit = ([u8; 32], [[u8; 32]; FORS_A]);
+/// One XMSS tree's `LEAVES` WOTS leaves.
+type XmssLeaves = [[u8; 32]; LEAVES];
 
 /// Parallel work unit: an independent tree build.
-/// `Xmss(layer)` builds 32 WOTS leaves; `Fors(tree)` signs one tree.
+/// `Xmss(layer)` builds `LEAVES` WOTS leaves; `Fors(tree)` signs one tree.
 #[derive(Clone, Copy, Debug)]
 enum Unit {
     Xmss(u32),
@@ -62,7 +63,7 @@ pub fn worker_count() -> usize {
 /// (platform failure, never a crypto error) falls back to serial
 /// recomputation of that worker's chunk in the joining thread.
 pub fn mt_sign(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN]) {
-    let workers = worker_count().min(42);
+    let workers = worker_count().min(D + FORS_K);
     mt_sign_with_workers(sk, msg, sig_out, workers.max(1));
 }
 
@@ -82,7 +83,7 @@ fn compute_chunk(
     while i < units.len() {
         match units[i] {
             Unit::Xmss(layer) => {
-                let tree = ctx.tree_idx >> (5u64 * (u64::from(layer) + 1));
+                let tree = ctx.tree_idx >> (HP as u128 * (u128::from(layer) + 1));
                 xm.push((layer, xmss_build(&ctx.pubseed, &ctx.esk, layer, tree)));
             }
             Unit::Fors(tree) => {
@@ -107,24 +108,24 @@ fn compute_chunk(
 pub fn mt_sign_with_workers(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN], workers: usize) {
     let workers = workers.clamp(1, 64);
     let ctx = pre_sign(sk, msg);
-    // 42 independent units, strided across workers for balance
+    // `D + FORS_K` independent units, strided across workers for balance
     // (XMSS builds are ~100× heavier than FORS builds).
-    let mut units = Vec::with_capacity(42);
+    let mut units = Vec::with_capacity(D + FORS_K);
     let mut l = 0u32;
-    while l < 12 {
+    while (l as usize) < D {
         units.push(Unit::Xmss(l));
         l += 1;
     }
     let mut t = 0u32;
-    while t < 30 {
+    while (t as usize) < FORS_K {
         units.push(Unit::Fors(t));
         t += 1;
     }
     let workers = workers.min(units.len());
     // Owned per-unit outputs, assembled in index order after joining —
     // thread scheduling cannot affect the bytes.
-    let mut xmss_leaves: Vec<Option<XmssLeaves>> = (0..12).map(|_| None).collect();
-    let mut fors_units: Vec<Option<ForsUnit>> = (0..30).map(|_| None).collect();
+    let mut xmss_leaves: Vec<Option<XmssLeaves>> = (0..D).map(|_| None).collect();
+    let mut fors_units: Vec<Option<ForsUnit>> = (0..FORS_K).map(|_| None).collect();
     std::thread::scope(|s| {
         let mut handles = Vec::with_capacity(workers);
         for w in 0..workers {
@@ -155,9 +156,9 @@ pub fn mt_sign_with_workers(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN],
     // Serial assembly (fast: WOTS signs + climbs + serialize). Any slot
     // still empty (only after a double platform failure) is computed
     // serially, so assembly is total without panicking.
-    let mut fsig: ForsSig = [([0u8; 32], [[0u8; 32]; 7]); 30];
+    let mut fsig: ForsSig = [([0u8; 32], [[0u8; 32]; FORS_A]); FORS_K];
     let mut t = 0u32;
-    while (t as usize) < 30 {
+    while (t as usize) < FORS_K {
         fsig[t as usize] = match fors_units[t as usize] {
             Some(u) => u,
             None => fors_sign_one(&ctx.pubseed, &ctx.esk, t, ctx.fors_idx[t as usize]),
@@ -166,13 +167,17 @@ pub fn mt_sign_with_workers(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN],
     }
     let fors_pk = fors_verify(&ctx.pubseed, &ctx.fors_idx, &fsig);
     #[allow(clippy::large_stack_arrays)]
-    let mut ht_sig: Box<[LayerSig; 12]> = Box::new([([[0u8; 32]; 67], [[0u8; 32]; 5]); 12]); // heap-boxed immediately
+    let mut ht_sig: Box<[LayerSig; D]> = Box::new([([[0u8; 32]; WOTS_LEN], [[0u8; 32]; HP]); D]); // heap-boxed immediately
     let mut msg = fors_pk;
-    let mut child_tree = ctx.tree_idx >> 5;
+    let mut child_tree = ctx.tree_idx >> HP;
     let mut l = 0u32;
-    while l < 12 {
-        let tree = ctx.tree_idx >> (5u64 * (u64::from(l) + 1));
-        let at = if l == 0 { ctx.leaf } else { u32::try_from(child_tree & 31).unwrap_or(0) };
+    while (l as usize) < D {
+        let tree = ctx.tree_idx >> (HP as u128 * (u128::from(l) + 1));
+        let at = if l == 0 {
+            ctx.leaf
+        } else {
+            u32::try_from(child_tree & (LEAVES as u128 - 1)).unwrap_or(0)
+        };
         // Same totality rule as the FORS assembly above: recompute a
         // lost unit serially instead of panicking.
         let leaves_owned: XmssLeaves = match xmss_leaves[l as usize] {

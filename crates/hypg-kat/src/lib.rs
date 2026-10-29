@@ -12,19 +12,19 @@ use hypg_symm::{open, seal, Key, Nonce, TAG_LEN};
 
 /// Frozen KAT vector file for the current spec version.
 /// Compared byte-for-byte by `kats_match_frozen_file`.
-pub const FROZEN_KATS: &str = include_str!("../kats/v0.7.0.txt");
+pub const FROZEN_KATS: &str = include_str!("../kats/v2.0.0.txt");
 
-/// Frozen hash-pillar KAT vector file (v0.7 hash/XOF/keyed/KDF vectors).
+/// Frozen hash-pillar KAT vector file (v2.0 hash/XOF/keyed/KDF vectors).
 /// Compared byte-for-byte by `hash_kats_match_frozen_file`.
-pub const FROZEN_HASH_KATS: &str = include_str!("../kats-hash/v0.7.0.txt");
+pub const FROZEN_HASH_KATS: &str = include_str!("../kats-hash/v2.0.0.txt");
 
-/// Frozen Symm KAT vector file (v0.5 AEAD vectors).
+/// Frozen Symm KAT vector file (v2.0 AEAD vectors).
 /// Compared byte-for-byte by `symm_kats_match_frozen_file`.
-pub const FROZEN_SYMM_KATS: &str = include_str!("../kats-symm/v0.7.0.txt");
+pub const FROZEN_SYMM_KATS: &str = include_str!("../kats-symm/v2.0.0.txt");
 
-/// Frozen DS KAT vector file (v0.6 signature vectors).
+/// Frozen DS KAT vector file (v2.0 signature vectors).
 /// Compared byte-for-byte by `ds_kats_match_frozen_file`.
-pub const FROZEN_DS_KATS: &str = include_str!("../kats-ds/v0.7.0.txt");
+pub const FROZEN_DS_KATS: &str = include_str!("../kats-ds/v2.0.0.txt");
 
 fn hex(bytes: &[u8], out: &mut String) {
     const H: &[u8; 16] = b"0123456789abcdef";
@@ -42,7 +42,7 @@ fn hex(bytes: &[u8], out: &mut String) {
 ///
 /// ```rust
 /// let kats = hypg_kat::render_kats();
-/// assert!(kats.contains("hypg_version = 0.7.0"));
+/// assert!(kats.contains("hypg_version = 2.0.0"));
 /// ```
 ///
 /// # Panics
@@ -57,7 +57,7 @@ pub fn render_kats() -> String {
     b3_hash(b"abc", &mut h);
     s.push_str("b3_abc = ");
     hex(&h, &mut s);
-    s.push_str("\nhypg_version = 0.7.0-module-n256-k2-q4096-b3\n");
+    s.push_str("\nhypg_version = 2.0.0-module-n256-k4-q4096-b3\n");
 
     for tag in [0x00u8, 0x42u8, 0xFFu8] {
         let seed = [tag; 32];
@@ -97,7 +97,7 @@ pub fn print_kats() {
 ///
 /// ```rust
 /// let kats = hypg_kat::render_symm_kats();
-/// assert!(kats.contains("hypg_symm_version = 0.7.0"));
+/// assert!(kats.contains("hypg_symm_version = 2.0.0"));
 /// ```
 ///
 /// # Panics
@@ -106,7 +106,7 @@ pub fn print_kats() {
 #[must_use]
 pub fn render_symm_kats() -> String {
     let mut s = String::new();
-    s.push_str("hypg_symm_version = 0.7.0-chacha-etm-b3mac\n");
+    s.push_str("hypg_symm_version = 2.0.0-chacha-etm-b3mac\n");
     // (pt_len, ad_len, key_byte, nonce_byte) cases incl. rate edges.
     let cases: [(usize, usize, u8, u8); 5] = [
         (0, 0, 0x42, 0x11),
@@ -164,7 +164,7 @@ pub fn print_symm_kats() {
     print!("{}", render_symm_kats());
 }
 
-/// Render deterministic DS vectors (fixed seeds/messages; 35 KB sigs).
+/// Render deterministic DS vectors (fixed seeds/messages; ~50 KB sigs).
 ///
 /// # Panics
 ///
@@ -172,7 +172,7 @@ pub fn print_symm_kats() {
 #[must_use]
 pub fn render_ds_kats() -> String {
     let mut s = String::new();
-    s.push_str("hypg_ds_version = 0.7.0-slh-128s-n32-b3\n");
+    s.push_str("hypg_ds_version = 2.0.0-slh-256f-n32-b3\n");
     let seeds: [[u8; 32]; 2] = [[0x42u8; 32], [0xFFu8; 32]];
     let msgs: [&[u8]; 2] = [b"", b"The quick brown fox jumps over the lazy dog. 0123456789"];
     for (idx, seed) in seeds.iter().enumerate() {
@@ -212,7 +212,7 @@ pub fn print_ds_kats() {
 ///
 /// ```rust
 /// let kats = hypg_kat::render_hash_kats();
-/// assert!(kats.contains("hypg_hash_version = 0.7.0"));
+/// assert!(kats.contains("hypg_hash_version = 2.0.0"));
 /// ```
 ///
 /// # Panics
@@ -221,7 +221,7 @@ pub fn print_ds_kats() {
 #[must_use]
 pub fn render_hash_kats() -> String {
     let mut s = String::new();
-    s.push_str("hypg_hash_version = 0.7.0-b3-api\n");
+    s.push_str("hypg_hash_version = 2.0.0-b3-api\n");
     let mut pattern = [0u8; 1025];
     let mut i = 0u32;
     while i < 1025 {
@@ -275,8 +275,8 @@ mod tests {
             let (ct, ss1) = encaps(&pk, &coins);
             let ss2 = decaps(&sk, &ct);
             assert_eq!(ss1, ss2);
-            assert_eq!(pk.0.len(), 800);
-            assert_eq!(ct.0.len(), 800);
+            assert_eq!(pk.0.len(), hypg_core::params::PK_LEN);
+            assert_eq!(ct.0.len(), hypg_core::params::CT_LEN);
         }
     }
 
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(
             render_kats(),
             FROZEN_KATS,
-            "KAT output drifted from crates/hypg-kat/kats/v0.4.0.txt; \
+            "KAT output drifted from crates/hypg-kat/kats/v2.0.0.txt; \
              any intentional vector change requires a spec version bump \
              and a newly frozen file"
         );
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(
             render_symm_kats(),
             FROZEN_SYMM_KATS,
-            "Symm KAT output drifted from crates/hypg-kat/kats-symm/v0.5.0.txt; \
+            "Symm KAT output drifted from crates/hypg-kat/kats-symm/v2.0.0.txt; \
              any intentional vector change requires a spec version bump \
              and a newly frozen file"
         );
@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(
             render_ds_kats(),
             FROZEN_DS_KATS,
-            "DS KAT output drifted from crates/hypg-kat/kats-ds/v0.6.0.txt; \
+            "DS KAT output drifted from crates/hypg-kat/kats-ds/v2.0.0.txt; \
              any intentional vector change requires a spec version bump \
              and a newly frozen file"
         );
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(
             render_hash_kats(),
             FROZEN_HASH_KATS,
-            "Hash KAT output drifted from crates/hypg-kat/kats-hash/v0.7.0.txt; \
+            "Hash KAT output drifted from crates/hypg-kat/kats-hash/v2.0.0.txt; \
              any intentional vector change requires a spec version bump \
              and a newly frozen file"
         );

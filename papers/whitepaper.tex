@@ -8,9 +8,9 @@
 \usepackage{xcolor}
 
 \title{HypG: A Post-Quantum Cryptographic Suite\\ in Safe Rust\\[0.5ex]
-\large White Paper --- Design, Architecture, and Evaluation (v1.0)}
+\large White Paper --- Design, Architecture, and Evaluation (v2.0)}
 \author{HypG Project}
-\date{September 2026}
+\date{October 2026}
 
 \begin{document}
 \maketitle
@@ -20,10 +20,12 @@ HypG is a from-scratch post-quantum cryptographic suite written in
 100\% safe Rust with zero dependencies: a Module-LWE
 key-encapsulation mechanism, BLAKE3-based hashing, ChaCha20 /
 keyed-BLAKE3 authenticated encryption (one-shot and streaming), and
-stateless hash-based signatures.  The suite is a \emph{frozen research
-prototype} (v1.0): every construction is implemented, deterministically
-tested, adversarially exercised, and fully gated in CI --- but unaudited,
-with unconfirmed bit-security, and explicitly \textbf{not for deployment}.
+stateless hash-based signatures.  The suite is a \emph{hardened research
+profile} (v2.0): parameters now match NIST Category-5 dimensions, every
+construction is implemented, deterministically tested, adversarially
+exercised, and fully gated in CI --- but unaudited, with unconfirmed
+bit-security, and explicitly \textbf{not for deployment}.  Matching
+NIST dimensions is not a security certification.
 This paper describes the design rationale, the architecture, the
 evaluation results, and the honest limits of what a local machine can prove.
 \end{abstract}
@@ -45,7 +47,7 @@ just one primitive: key establishment, hashing, authenticated
 encryption, and signatures, sharing a single implementation core.  It is
 written from scratch in safe Rust, with no dependencies and no
 \texttt{unsafe} code, targeting \texttt{no\_std} environments for the
-cryptographic libraries.  Version 1.0 freezes the design as a research
+cryptographic libraries.  Version 2.0 hardens the parameter profile as a research
 prototype: functionally complete and obsessively tested, but unaudited
 and making no security claim beyond its explicitly stated position.
 
@@ -53,7 +55,7 @@ and making no security claim beyond its explicitly stated position.
 
 To avoid misunderstanding: HypG is not a standard, not a submission to
 any standardization process, not audited, and not deployable.  Its KEM
-targets Kyber-512-class dimensions with \emph{unconfirmed} bit-security.
+targets NIST Category-5 dimensions with \emph{unconfirmed} bit-security.
 Its test vectors pin behavior, not security.  Section~\ref{sec:limits}
 documents these limits in full; the freeze certifies \emph{process
 completeness} --- everything checkable on a local machine is checked ---
@@ -68,7 +70,7 @@ mechanically in continuous integration:
 \begin{enumerate}
 \item \textbf{Standard primitives, used as designed.} BLAKE3 for
 hashing, ChaCha20 for encryption, Module-LWE for the KEM trapdoor,
-SLH-shaped hash-based signatures.  No novel symmetric constructions:
+SLH-DSA-shaped hash-based signatures.  No novel symmetric constructions:
 proposals for a custom sponge, a novel keystream permutation, and
 truncated 16-byte tags were evaluated and \emph{rejected}, because each
 would trade oracle-validated assurance for unanalyzed novelty.
@@ -77,7 +79,8 @@ dependencies --- \texttt{cargo tree} shows workspace crates only, and
 \texttt{cargo audit} is clean.  There is nothing upstream to compromise.
 \item \textbf{Memory safety by construction.} \texttt{\#![forbid(unsafe\_code)]}
 in every library, gated by CI.  Miri (Rust's undefined-behavior
-interpreter) runs clean over the core, symmetric, and KEM crates.
+interpreter) runs clean over the v2.0 core and symmetric crates; the
+KEM re-run is pending.
 \item \textbf{Determinism and bit-exactness.} Same inputs produce same
 outputs on x86-64 and AArch64, in debug and release builds.
 Little-endian serialization is explicit everywhere (a CI gate forbids
@@ -106,7 +109,7 @@ Pillar & Crate(s) & Construction \\
 KEM & \texttt{hypg-kem} & Module-LWE + Fujisaki--Okamoto, implicit rejection \\
 Hash & \texttt{hypg-hash} & BLAKE3 API: 32/64-byte digests, XOF, keyed, KDF \\
 AEAD & \texttt{hypg-symm}, \texttt{hypg-aead} & ChaCha20 + keyed-BLAKE3 EtM, one-shot and streaming \\
-Signatures & \texttt{hypg-ds}, \texttt{hypg-mt} & SLH-shaped FORS + 12-layer XMSS hypertree \\
+Signatures & \texttt{hypg-ds}, \texttt{hypg-mt} & SLH-DSA-256f-shaped FORS + 17-layer XMSS hypertree \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -125,19 +128,20 @@ libraries, because threads are a platform capability, not a primitive.
 \begin{center}
 \begin{tabular}{ll}
 \toprule
-KEM & $n=256$, $k=2$ (dimension 512), $q=2^{12}$, CBD $\eta=2$, 1 bit/coefficient \\
-& $pk/ct = 800$ B, $sk = 864$ B, $ss = 32$ B \\
+KEM & $n=256$, $k=4$ (dimension 1024), $q=2^{12}$, CBD $\eta=2$, 1 bit/coefficient \\
+& $pk = 1568$ B, $ct = 1440$ B, $sk = 1632$ B, $ss = 32$ B \\
 Hash & 32/64-byte digests, arbitrary-length XOF \\
 AEAD & 32 B key, 12 B nonce, 32 B tag, $ct.len() = pt.len()$, stream $< 2^{38}$ B \\
-Signatures & 128s shape: $pk = 64$ B, $sk = 128$ B, $sig = 35456$ B \\
+Signatures & 256f shape: $pk = 64$ B, $sk = 128$ B, $sig = 49992$ B \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 The power-of-two modulus $q = 4096$ (rather than Kyber's 3329) is a
 documented deviation enabling branchless mask-only reduction.  Version
-1.0 freezes the v0.7 parameter generation unchanged, preserving wire
-compatibility by design.
+2.0 is a breaking wire-format change: the KEM module rank doubles and
+the signature profile moves to the 256f shape.  v1.0 vectors remain in
+the repository as historical evidence.
 
 %======================================================================
 \section{Pillar designs}
@@ -153,7 +157,7 @@ message and public key (the FO $G$ oracle), and the shared secret binds
 message, ciphertext, and public-key hash.  \texttt{Decaps} re-encrypts
 and selects between the real and a fake secret in constant time
 (implicit rejection).  Decryption noise margin is analytic: $\pm 1024$
-against $\sim$50 standard deviations, confirmed by 20000/20000 clean
+against $\sim$60 standard deviations, confirmed by 20000/20000 clean
 round-trips at maximum load.
 
 \subsection{Hash: BLAKE3, nothing else}
@@ -182,13 +186,13 @@ these tests caught a genuine keystream-skipping bug during development
 
 \subsection{Signatures: SLH-shaped hypertree}
 
-FORS (30 trees) signs the message digest; a 12-layer XMSS hypertree of
-WOTS+ chains ($w = 16$) authenticates the FORS key; hedged randomness
-keeps signing deterministic.  Every WOTS+ chain runs all 15 steps with
-branchless selection (constant-time rule), and reserved padding in the
-35\,KB signature is rejection-checked at verification.  A threaded
-signer parallelizes the 42 independent tree builds for a $\sim$5$\times$
-speedup with byte-identical output.
+FORS (35 trees of 512 leaves) signs the message digest; a 17-layer
+XMSS hypertree of WOTS+ chains ($w = 16$) authenticates the FORS key;
+hedged randomness keeps signing deterministic.  Every WOTS+ chain runs
+all 15 steps with branchless selection (constant-time rule), and
+reserved padding in the 49992-byte signature is rejection-checked at
+verification.  A threaded signer parallelizes the 52 independent tree
+builds for a $\sim$3.7$\times$ speedup with byte-identical output.
 
 %======================================================================
 \section{Implementation posture}
@@ -209,14 +213,16 @@ and debug renderings of key-holding types are redacted.
 
 129 tests pass on stable (debug and release) and on the MSRV 1.70
 toolchain: 96 unit, 20 CLI failure-path integration, 13 doc-tests.
-Four frozen KAT files pin behavior byte-for-byte; outputs are identical
-across x86-64/AArch64 and debug/release.  Miri is clean for core,
-symmetric, and KEM crates.
+Four frozen v2.0.0 KAT files pin behavior byte-for-byte; debug and
+release outputs are identical.  Cross-architecture v2.0 re-diffing
+passed: a musl-static KAT binary under \texttt{qemu-aarch64} matched
+x86-64 byte-for-byte (234114/234114 bytes).  Miri is clean for the v2.0
+core and symmetric crates; the KEM re-run is pending.
 
 \subsection{Adversarial testing (S1--S14)}
 
 The red-team harness runs 14 suites: garbage robustness, malleability
-sweeps (all 6400 ciphertext bits flip the secret), an $8 \times 8$
+sweeps (all 11520 ciphertext bits flip the secret), an $8 \times 8$
 key-mismatch matrix, message extremes, FO binding, sampler statistics
 (524288 CBD coefficients, mean exactly 0), a 20000-trial failure sweep
 (zero failures), determinism, AEAD forgery sweeps, signature forgery
@@ -230,17 +236,18 @@ maximum load in release builds.
 \begin{center}
 \begin{tabular}{ll}
 \toprule
-Hash / streaming / XOF (1 MiB) & 836 / 841 / 808 MB/s \\
-ChaCha20 keystream & 752 MB/s \\
-AEAD seal / open (1 MiB) & 395 / 395 MB/s \\
-KEM keygen / encaps / decaps & 199 / 288 / 385 $\mu$s \\
-Sign / verify & 62 ms / 1.8 ms (threaded sign: 12 ms) \\
+Hash / streaming / XOF (1 MiB) & 818 / 820 / 807 MB/s \\
+ChaCha20 keystream & 754 MB/s \\
+AEAD seal / open (1 MiB) & 397 / 405 MB/s \\
+KEM keygen / encaps / decaps & 751 / 914 / 1107 $\mu$s \\
+Sign / verify & 45.7 ms / 2.25 ms (threaded sign: 12.6 ms) \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-A Welch t-test over 10000 interleaved valid/tampered timings peaks at
-$|t| \approx 1.23$ (no signal; informational only, not a proof).
+Interleaved valid/tampered medians are recorded as per-mille smoke
+tests (KEM 1002pm, AEAD 581pm, DS verify 998pm); informational only,
+not a proof.
 
 %======================================================================
 \section{Limits and threat model}
@@ -259,7 +266,7 @@ vectors, and CI gates respectively.
 %======================================================================
 \section{Road to a security claim}
 
-Four external milestones stand between v1.0 and any security claim:
+Four external milestones stand between v2.0 and any security claim:
 (1)~lattice-estimator confirmation with parameter review ($q = 4096$
 vs.\ $3329$); (2)~third-party cryptanalysis of the trapdoor, the
 \texttt{CA-PRF}, the EtM binding including streaming, and the DS
@@ -270,7 +277,7 @@ evidence classes involved.
 %======================================================================
 \section{Conclusion}
 
-HypG v1.0 delivers a complete, frozen, obsessively tested
+HypG v2.0 delivers a complete, hardened, obsessively tested
 post-quantum suite in safe Rust --- and an honest account of what
 testing can and cannot prove.  The code, vectors, measurements, and
 gates are public and reproducible; the remaining work belongs to

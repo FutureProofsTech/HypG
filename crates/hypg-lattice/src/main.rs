@@ -259,9 +259,9 @@ fn gaussian_heuristic(d: f64, log2_vol: f64) -> f64 {
 }
 
 fn real_params() -> (bool, String) {
-    // Module-LWE as plain LWE: N = n·k = 512 unknowns; primal attack with
-    // m = 512 samples → embedding dim d = m + N + 1 = 1025, vol = q^m.
-    let (n, k, m) = (256.0f64, 2.0f64, 512.0f64);
+    // Module-LWE as plain LWE: N = n·k = 1024 unknowns; primal attack with
+    // m = 1024 samples → embedding dim d = m + N + 1 = 2049, vol = q^m.
+    let (n, k, m) = (256.0f64, 4.0f64, 1024.0f64);
     let (qlog2, sigma) = (12.0f64, 1.0f64); // q = 4096, CBD(2) var 1
     let dim = m + n * k + 1.0;
     let log2_vol = m * qlog2;

@@ -1,26 +1,56 @@
 # Changelog (HypG)
 
-All notable changes. Format follows Keep-a-Changelog. v1.0.0 is a
-**frozen research prototype** (API stable, unaudited, do not deploy):
-parameters unchanged since v0.7 (KEM/AEAD/hash) and v0.6 (DS), so 1.0
-reads 0.7 vectors by design (`HYP-G/v07/...` domains, v0.7.0 KAT
-labels). Non-goals are frozen with it — see README.
+All notable changes. Format follows Keep-a-Changelog. v2.0.0 is a
+**hardened research profile** (breaking parameter change, unaudited, do
+not deploy): KEM `k = 4`, DS `HypG-DS-256f`. The `HYP-G/v07/...` domain
+strings and BLAKE3/ChaCha20 primitives are unchanged. v1.0.0 remains a
+frozen historical release with its own KAT files.
 
-## [Unreleased]
+## [2.0.0] — 2026-10-30 — hardened parameter profile
+
+### Changed (breaking)
+- **KEM parameter hardening**: module rank `k = 2 → 4` (lattice
+  dimension 512 → 1024, NIST Category-5 dimensions). New sizes:
+  `pk = 1568 B`, `ct = 1440 B`, `sk = 1632 B`, `ss = 32 B`.
+  `dot2` generalized to `dot` for rank-4 vectors; matrix `A` is now
+  `4×4`.
+- **Signature parameter hardening**: `HypG-DS-128s` (`h=60`, `d=12`,
+  `h'=5`, FORS `30×7`) replaced by `HypG-DS-256f` (`h=68`, `d=17`,
+  `h'=4`, FORS `35×9`). New `sig = 49992 B`; `pk = 64 B`,
+  `sk = 128 B` unchanged. The tree index widened to `u128` (12-byte
+  `ADRS` field) and serialization now uses the parameter constants.
+- **KAT re-freeze**: active files are `kats*/v2.0.0.txt`; v0.4–v0.7
+  files remain in the tree as historical evidence.
+- **Workspace version** bumped to `2.0.0`; all crates and `Cargo.lock`
+  updated.
 
 ### Added
-- IACR-style research paper (`papers/iacr.pdf`, LNCS class, 6 pages,
-  17 references) by Dimitar Luchev (Independent Researcher) —
-  engineering contributions, full evaluation, honest assurance
-  boundary.
-- Professional GitHub README (pillars, architecture, testing and
-  performance tables, License section) plus White Paper
-  (`papers/whitepaper.pdf`: design and rationale) and Yellow Paper
-  (`papers/yellowpaper.pdf`: formal specification).
+- IACR-style research paper (`papers/iacr.tex`, LNCS class) by Dimitar
+  Luchev (Independent Researcher), with LaTeX source tracked and the
+  built PDF excluded.
+- White Paper (`papers/whitepaper.tex`) and Yellow Paper
+  (`papers/yellowpaper.tex`) updated for v2.0 parameters.
+- Professional GitHub README with pillars, architecture, testing,
+  performance, security boundary, and License sections.
+- `docs/nist-alignment.md`: parameter mapping to FIPS 203/205 and an
+  explicit gap analysis for NIST compliance and production use.
+- `hypg-lattice` L4 check updated to the rank-4 dimension
+  (`d = 2049`, `log2vol = 12288`).
 
 ### Changed
 - License switched to **GPL-3.0-or-later** (`LICENSE`, workspace
   metadata); README documents the terms.
+- Red-team S2 now sweeps all 11,520 ciphertext bits; S11 checks all 17
+  DS layer pads.
+- Bench re-recorded for v2.0: KEM 751/914/1107 µs, DS sign/verify
+  45.7/2.25 ms (threaded sign 12.6 ms), AEAD 397/405 MB/s, hash
+  818 MB/s, ChaCha20 754 MB/s.
+
+### Security note
+- Matching NIST Category-5 *dimensions* is not a security
+  certification. Bit-security remains unconfirmed (no estimator run),
+  and the signature composition is unreviewed. v2.0 remains
+  **unaudited — do not deploy**.
 
 ## [1.0.0] — 2026-09-29 — frozen prototype
 

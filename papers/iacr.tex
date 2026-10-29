@@ -17,18 +17,19 @@ in Safe Rust}
 \maketitle
 
 \begin{abstract}
-We present HypG v1.0, a from-scratch post-quantum cryptographic suite
+We present HypG v2.0, a from-scratch post-quantum cryptographic suite
 implemented in 100\% safe Rust with zero dependencies: a Module-LWE
-key-encapsulation mechanism at Kyber-512-class dimensions, BLAKE3-based
-hashing, ChaCha20 / keyed-BLAKE3 authenticated encryption in one-shot
-and streaming form, and stateless hash-based signatures of SLH shape.
+key-encapsulation mechanism at NIST Category-5 dimensions ($k=4$,
+lattice dimension 1024), BLAKE3-based hashing, ChaCha20 /
+keyed-BLAKE3 authenticated encryption in one-shot and streaming form,
+and stateless hash-based signatures of SLH-DSA-256f shape.
 The suite's contributions are engineering ones: (i)~a single
 \texttt{no\_std} core serving all four pillars; (ii)~a streaming AEAD
 front proven byte-identical to its one-shot counterpart across
 adversarial chunkings, so existing test vectors cover both;
 (iii)~an exhaustive local assurance methodology --- 129 tests, 14
 adversarial suites, frozen known-answer vectors, Miri-clean
-interpreted execution, and a verified MSRV floor; and (iv)~honestly
+core/symmetric execution, and a verified MSRV floor; and (iv)~honestly
 reported negative results, including a harmful PGO outcome and the
 rejection of custom symmetric designs.  We argue what such testing can
 establish (correctness, determinism, misuse behavior, timing posture)
@@ -60,9 +61,11 @@ once, in a single from-scratch codebase: 100\% safe Rust (no
 upstream to compromise), \texttt{no\_std} cryptographic libraries
 (suitable for constrained targets), bit-exact determinism across
 x86-64 and AArch64, and frozen test vectors pinning every output byte.
-Version 1.0 freezes four pillars --- KEM, hashing, AEAD, signatures ---
-as a \emph{research prototype}: functionally complete and obsessively
-tested, but unaudited and explicitly not for deployment.
+Version 2.0 hardens the parameter profile of four pillars --- KEM,
+hashing, AEAD, signatures --- as a \emph{research prototype}:
+functionally complete and obsessively tested, but unaudited and
+explicitly not for deployment.  Matching NIST parameter dimensions is
+not a security certification, and we make no such claim.
 
 \paragraph{Contributions.} Beyond the code itself, this paper contributes:
 (1)~the suite architecture, including the decision record for rejected
@@ -108,7 +111,8 @@ novelty, creating a cryptanalysis burden no local setup can discharge.
 clean), so there is nothing upstream to compromise.
 \item \textbf{Memory safety by construction.}
 \texttt{\#![forbid(unsafe\_code)]} in every library, CI-gated; Miri
-clean over core, symmetric, and KEM crates (\S\ref{sec:eval}).
+clean over the v2.0 core and symmetric crates (KEM re-run pending;
+\S\ref{sec:eval}).
 \item \textbf{Bit-exact determinism.} Same inputs yield same outputs on
 x86-64/AArch64, debug/release.  All serialization is explicitly
 little-endian (a CI gate forbids endian-dependent conversions); an
@@ -124,17 +128,18 @@ failures (exit 3).
 \label{sec:kem}
 
 \paragraph{Parameters.} Ring $R_q = \mathbb{Z}_q[X]/(X^{256}+1)$,
-dimension $n = 256$, module rank $k = 2$ (lattice dimension 512),
+dimension $n = 256$, module rank $k = 4$ (lattice dimension 1024),
 modulus $q = 2^{12} = 4096$, centered binomial noise $\eta = 2$,
 32-byte FO message at 1 bit/coefficient (spacing 2048, decode
-threshold 1024).  Sizes: $pk = ct = 800$~B, $sk = 864$~B, $ss = 32$~B.
+threshold 1024).  Sizes: $pk = 1568$~B, $ct = 1440$~B,
+$sk = 1632$~B, $ss = 32$~B.
 The power-of-two $q$ (vs.\ Kyber's 3329) is a documented deviation
 enabling branchless mask-only reduction without Barrett division.
 
 \begin{construction}[KeyGen]
 On seed $s \in \{0,1\}^{256}$: $\mathit{seed}_A \gets
 \mathrm{CAExpand}(s, \text{seed-a})$;
-$A \gets \mathrm{Uniform}(\mathit{seed}_A)^{2\times 2}$;
+$A \gets \mathrm{Uniform}(\mathit{seed}_A)^{4\times 4}$;
 $s,e \gets \mathrm{CBD}_2$; $b \gets As+e$;
 $pk \gets \mathit{seed}_A \,\|\, \mathrm{pack}_{12}(b)$;
 $\mathit{fake} \gets \mathrm{CAExpand}(s, \text{fake})$;
@@ -160,16 +165,16 @@ expander (32 branchless automaton rounds under an outer BLAKE3, uniform
 in the ROM) under distinct ASCII domains.
 
 \paragraph{Correctness.} The decode margin is analytic ($\pm 1024$
-against noise of standard deviation $\sim$50) and empirical:
-20000/20000 clean round-trips at maximum load (plus 100000 on identical
-lattice code pre-migration).  Malleability sweeps flip all 6400
-ciphertext bits with zero unchanged secrets; an $8\times8$
-key-mismatch matrix shows zero off-diagonal anomalies.
+against noise of standard deviation $\sim$60) and empirical:
+20000/20000 clean round-trips at maximum load.  Malleability sweeps
+flip all 11520 ciphertext bits with zero unchanged secrets; an
+$8\times8$ key-mismatch matrix shows zero off-diagonal anomalies.
 
-\paragraph{Hardness discussion.} Dimensions target the Kyber-512 class
-($\sim$100+~bit classical hardness suggested, \textbf{unconfirmed}).
-Confirmation via the LWE estimator~\cite{APS15} (Sage) is the top
-backlog item; a local lattice lab validates the harness itself by
+\paragraph{Hardness discussion.} Dimensions target the NIST Category-5
+class (the Kyber-1024 neighbourhood), but this is \textbf{unconfirmed}:
+the larger $q=4096$ changes the lattice profile relative to Kyber's
+3329.  Confirmation via the LWE estimator~\cite{APS15} (Sage) is the
+top backlog item; a local lattice lab validates the harness itself by
 breaking toy-LWE ($n=8$) with verified LLL while failing to scale, the
 expected healthy signature.
 
@@ -199,25 +204,25 @@ bug in development (counter restarted per chunk), fixed with cross-chunk
 block buffering.
 
 \paragraph{Performance (Intel i5-14400F, release).} Hash/streaming/XOF
-at 836/841/808\,MB/s; ChaCha20 at 752\,MB/s; AEAD seal/open at
-395\,MB/s (1\,MiB); KEM at 199/288/385\,$\mu$s; sign/verify at
-62\,ms/1.8\,ms (threaded: 12\,ms, byte-identical).
+at 818/820/807\,MB/s; ChaCha20 at 754\,MB/s; AEAD seal/open at
+397/405\,MB/s (1\,MiB); KEM at 751/914/1107\,$\mu$s; sign/verify at
+45.7\,ms/2.25\,ms (threaded: 12.6\,ms, byte-identical).
 
 %======================================================================
 \section{Signatures}
 
 Hedged $R \gets \mathrm{PRF}(sk.\mathrm{prf}, m)$; 64-byte streamed
-digest split into $30 \times 7$-bit FORS indices, a 60-bit tree index,
-and a 5-bit leaf.  FORS (30 trees of 128 leaves) signs the digest; a
-12-layer XMSS hypertree of WOTS+ chains ($w=16$, length 67, all 15
+digest split into $35 \times 9$-bit FORS indices, a 68-bit tree index,
+and a 4-bit leaf.  FORS (35 trees of 512 leaves) signs the digest; a
+17-layer XMSS hypertree of WOTS+ chains ($w=16$, length 67, all 15
 steps always executed with branchless selection) authenticates the FORS
 key; reserved zero pads per layer are rejection-checked at verify
-(12/12 adversarial pad flips reject).  Sizes: $pk = 64$~B,
-$sk = 128$~B, $sig = 35456$~B.  Composition bounds are cited
+(17/17 adversarial pad flips reject).  Sizes: $pk = 64$~B,
+$sk = 128$~B, $sig = 49992$~B.  Composition bounds are cited
 closed-form FORS/WOTS+/XMSS reductions; confirmation is auditor work.
-A scoped-thread signer parallelizes the 42 independent tree builds
-($\sim$5$\times$ faster, byte-identical); threading never enters the
-\texttt{no\_std} libraries.
+A scoped-thread signer parallelizes the $17+35=52$ independent tree
+builds ($\sim$3.7$\times$ faster, byte-identical); threading never
+enters the \texttt{no\_std} libraries.
 
 %======================================================================
 \section{Assurance methodology}
@@ -225,9 +230,8 @@ A scoped-thread signer parallelizes the 42 independent tree builds
 
 \paragraph{Correctness gates.} 129 tests pass on stable (debug and
 release) and on MSRV 1.70: 96 unit, 20 CLI failure-path integration,
-13 doc-tests.  Four frozen KAT files pin behavior byte-for-byte, with
-outputs identical across x86-64/AArch64 and debug/release, plus a
-1\,MB-stack run for embedded-shaped stacks.
+13 doc-tests.  Four frozen v2.0.0 KAT files pin behavior byte-for-byte,
+plus a 1\,MB-stack run for embedded-shaped stacks.
 
 \paragraph{Adversarial suites (S1--S14).} Garbage robustness, full
 malleability, key-mismatch matrix, message extremes, FO binding,
@@ -239,9 +243,9 @@ distinguished the spare-key design: fake-key corruption is invisible
 on the honest path but diverges the reject output), and streaming
 chunk games.  All pass at defaults and maximum load.
 
-\paragraph{Timing.} A Welch t-test over 10000 interleaved
-valid/tampered timings peaks at $|t| \approx 1.23$ (no signal;
-informational, not a proof).  \texttt{dudect}-grade study remains
+\paragraph{Timing.} Interleaved valid/tampered medians are recorded as
+per-mille smoke tests (KEM 1002pm, AEAD 581pm, DS verify 998pm);
+informational, not a proof.  \texttt{dudect}-grade study remains
 backlog by policy: the posture is structural (no secret branches),
 and the bench is a smoke signal, never evidence.
 
@@ -262,7 +266,7 @@ immunity beyond branchless timing posture, reduction of the
 behavior, not security.  Residual risks accepted as documented, not
 resolved: the estimator run, laboratory side channels (power/EM/fault),
 and human audit --- none achievable on the development machine, by
-construction of the evidence classes involved.  What v1.0 certifies is
+construction of the evidence classes involved.  What v2.0 certifies is
 \emph{process completeness}: everything checkable locally is checked
 and gated.
 

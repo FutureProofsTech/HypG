@@ -1,6 +1,6 @@
-# Deployment guide (HypG v0.4.0 — prototype, not production)
+# Deployment guide (HypG v2.0.0 — research profile, not production)
 
-This library is a research prototype (`0.x`, hardness unconfirmed).
+This library is a research prototype (hardness unconfirmed).
 If you still evaluate it in a test system, follow this page exactly.
 Deviations void every property below.
 
@@ -40,9 +40,9 @@ quality is entirely the caller's responsibility:
 | `enc(pk, ct, ss)` | `hypg-cli encaps <pk> [ --coins … ]` or `encaps(&pk, &fresh_coins)` |
 | `dec(sk, ct)` → `ss` (implicit reject) | `hypg-cli decaps <sk> <ct>` or `decaps(&sk, &ct)` — **never fails**; a forged `ct` yields a random-looking `ss`, never an error. Do not add your own validity check on `ss` (that would break implicit rejection). |
 
-Sizes: `pk`/`ct` 800 B, `sk` 864 B, `ss`/`seed`/`coins` 32 B.
+Sizes: `pk` 1568 B, `ct` 1440 B, `sk` 1632 B, `ss`/`seed`/`coins` 32 B.
 
-## 3b. Symmetric + signature operator rules (v0.7+)
+## 3b. Symmetric + signature operator rules (v2.0)
 
 - AEAD (ChaCha20 + keyed-BLAKE3 EtM): never reuse a `nonce` under one
   `key` (destroys confidentiality; authenticity survives).
@@ -51,7 +51,7 @@ Sizes: `pk`/`ct` 800 B, `sk` 864 B, `ss`/`seed`/`coins` 32 B.
   ~2⁴⁸ messages. One `(key, nonce)` pair covers messages below 256 GiB.
 - Signatures: stateless — no clone hazard, unlimited messages per key.
   `esk` (32 B) is the root secret: `hypg-cli ds-keygen` without `--esk`
-  samples it from the OS. Transport the full 35456-byte `sig`; verify
+  samples it from the OS. Transport the full 49992-byte `sig`; verify
   rejects short/long/truncated inputs without indexing them. Bind the
   64-byte `pk` out-of-band exactly like a KEM `pk`.
 - Zeroize `sk`/`ss`/AEAD keys after use (`zeroize()` methods); same
@@ -59,7 +59,7 @@ Sizes: `pk`/`ct` 800 B, `sk` 864 B, `ss`/`seed`/`coins` 32 B.
 
 ## 4. Transport rules
 
-- Always send the full 800-byte `ct`; truncation is handled safely
+- Always send the full 1440-byte `ct`; truncation is handled safely
   (rejection → random `ss`) but wastes a round trip.
 - Bind `pk` to the peer out-of-band (TOFU at minimum, signatures or
   a directory for anything serious). The KEM authenticates nothing by
@@ -70,16 +70,16 @@ Sizes: `pk`/`ct` 800 B, `sk` 864 B, `ss`/`seed`/`coins` 32 B.
 ## 5. Side-channel posture
 
 - The implementation is branchless w.r.t. secrets (fixed loops, no
-  secret indices, mask-only modular reduction) and shows no valid/invalid
-  `decaps` timing split locally (Welch `|t| = 0.34`, `n = 5000`,
+  secret indices, mask-only modular reduction) and shows no
+  valid/invalid `decaps` timing split locally (Welch smoke test,
   `docs/metrics.md`). That is a *smoke* result on one machine, not a
   proof: no power/EM/fault analysis exists. Do not run decapsulation
   where an adversary measures power or injects faults without additional
   hardening (shielding, redundancy, verification) this project does not
   supply.
 
-## 6. What still blocks production (`1.0`)
+## 6. What still blocks production (`2.0`)
 
 Lattice-estimator confirmation, `dudect`-grade timing, third-party audit
 (see `docs/estimator.md`, `docs/audit-prep.md`). Until all land, keep
-HypG in test systems with explicit `0.x` version pins.
+HypG in test systems with explicit version pins.

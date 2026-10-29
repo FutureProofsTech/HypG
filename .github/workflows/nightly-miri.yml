@@ -1,10 +1,11 @@
 name: hypg-miri
 
-# UB interpreted-execution over the arithmetic cores. KEM takes ~75 min
-# locally under Miri (interpreter), so this runs weekly + on demand —
-# never per-push. DS is excluded with rationale: hypertree signing
-# under Miri is hours-long; DS shares the Miri-clean core/symm/KEM
-# primitives and its own logic is covered by S10/S11/S12 redteam sweeps.
+# UB interpreted-execution over the arithmetic cores. KEM takes at
+# least ~75 min locally under Miri (interpreter; rank 4 is slower), so
+# this runs weekly + on demand — never per-push. DS is excluded with
+# rationale: hypertree signing under Miri is hours-long; DS shares the
+# core/symm/KEM primitives and its own logic is covered by S10/S11/S12
+# redteam sweeps.
 
 on:
   schedule:
@@ -19,6 +20,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri, rust-src
+      - name: miri (core, fast)
+        run: cargo +nightly miri test -p hypg-core --lib --locked
       - name: miri (symm, fast)
         run: cargo +nightly miri test -p hypg-symm --lib --locked
       - name: miri (kem, slow ~75 min)

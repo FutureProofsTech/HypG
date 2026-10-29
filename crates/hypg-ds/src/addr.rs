@@ -47,18 +47,17 @@ impl Addr {
         self.set_u32(0, v);
     }
 
-    /// Tree index (up to 2^55; low 8 bytes LE, rest zero).
-    pub fn set_tree(&mut self, v: u64) {
+    /// Tree index (up to 2^68; low 12 bytes LE, high bytes zero).
+    ///
+    /// The 12-byte field is the normative v2.0 layout. Values below
+    /// 2^64 serialize identically to the v1.x 8-byte field, so historical
+    /// addresses remain valid.
+    pub fn set_tree(&mut self, v: u128) {
         let le = v.to_le_bytes();
         let mut i = 0usize;
-        while i < 8 {
+        while i < 12 {
             self.0[4 + i] = le[i];
             i += 1;
-        }
-        let mut j = 12usize;
-        while j < 16 {
-            self.0[j] = 0;
-            j += 1;
         }
     }
 

@@ -1,6 +1,6 @@
 # HypG-Symm v0.7 Normative Spec (Encrypt-then-MAC rebuild)
 
-Status: **FROZEN for 1.0 (parameters v0.7, unchanged)**.
+Status: **FROZEN for 2.0 (parameters v0.7, unchanged)**.
 Platinum: `no_std`, zero dependencies, bit-exact LE.
 
 ## 0. Construction: ChaCha20 + keyed-BLAKE3 (Encrypt-then-MAC)
@@ -84,7 +84,7 @@ distinguish "untouched" from "erased" buffers in tests).
 - Unit: rate-edge sweep (63/64/65 B blocks), AD variants, tamper matrix
   (ct/tag/key/nonce/ad flips → `None`, `pt` untouched), determinism,
   subkey separation, length-mismatch `None`.
-- KAT freeze `kats-symm/v0.7.0.txt` (empty, 1 B, rate/block edges,
+- KAT freeze `kats-symm/v2.0.0.txt` (empty, 1 B, rate/block edges,
   1000 B).
 - Redteam S9 unchanged in shape (adapted nonces).
 - Bench: `seal/open` throughput + forged-tag timing ratio; CLI

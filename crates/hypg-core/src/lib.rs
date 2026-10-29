@@ -2,12 +2,12 @@
 //!
 //! `no_std`, zero-dependency, `forbid(unsafe_code)`.
 //!
-//! Prototype, frozen at v1.0, unaudited — do not deploy. See
+//! Hardened research profile v2.0, unaudited — do not deploy. See
 //! `docs/threat-model.md`.
 //!
 //! Forward-only automaton (fixed-size state, secret rule expansion,
 //! branchless steps, boundary folding, `CA-PRF`), Module-LWE polynomial
-//! layer (`R_q`, `q = 2^12`, rank 2), portable BLAKE3 (hash/XOF/keyed/
+//! layer (`R_q`, `q = 2^12`, rank 4), portable BLAKE3 (hash/XOF/keyed/
 //! derive, oracle-validated), and `ChaCha20` stream cipher — plus
 //! constant-time helpers. v0.7 replaced the original from-scratch
 //! SHA3/Keccak with BLAKE3 (see `CHANGELOG.md`); no Keccak remains.

@@ -22,10 +22,10 @@
 //!   reorder/truncate/duplicate rejection, 1 MiB stream identity).
 //!
 //! Configure cost: `HYPG_REDTEAM_TRIALS` (2..=1048576, default 64),
-//! `HYPG_REDTEAM_FLIPS` (`1..=800`, `all` = every of 6400 bit positions,
+//! `HYPG_REDTEAM_FLIPS` (`1..=CT_LEN`, `all` = every ciphertext bit,
 //! default 48).
 
-use hypg_core::params::{CT_LEN, PK_LEN};
+use hypg_core::params::{CT_LEN, PK_LEN, SK_LEN};
 use hypg_core::poly::cbd_eta2;
 use hypg_kem::{decaps, encaps, keygen};
 
@@ -86,7 +86,7 @@ fn s1() -> (bool, String) {
 /// `S2`: single-bit flips across the first `n` ct bytes plus the last
 /// 16 bytes (tail coverage) must all change `ss`. With
 /// `HYPG_REDTEAM_FLIPS=all`, every bit of every byte is flipped
-/// (`n == 8*CT_LEN`, ~6400 decapsulations — release only in practice).
+/// (`n == 8*CT_LEN`, full ciphertext-bit sweep — release only in practice).
 fn s2(n: usize) -> (bool, String) {
     use hypg_core::params::CT_LEN;
     let (pk, sk) = keygen(&[0x42u8; 32]);
@@ -110,7 +110,10 @@ fn s2(n: usize) -> (bool, String) {
         }
         (
             unchanged == 0,
-            format!("{checked} flips (all 6400 bit positions), {unchanged} left ss unchanged"),
+            format!(
+                "{checked} flips (all {} bit positions), {unchanged} left ss unchanged",
+                CT_LEN * 8
+            ),
         )
     } else {
         for i in 0..n {
@@ -357,14 +360,14 @@ fn s11a() -> (bool, String) {
     // B. Tampered `pk`: encaps under flipped pk, decaps under original sk.
     let mut bad_pk = pk;
     bad_pk.0[0] ^= 0x01;
-    bad_pk.0[799] ^= 0x80;
+    bad_pk.0[PK_LEN - 1] ^= 0x80;
     let (ct_b, ss_b) = encaps(&bad_pk, &[0x11u8; 32]);
     // Re-encryption binds the real pk: decaps under the original sk must
     // not recover the sender-side `ss_b`.
     let pk_tamper = decaps(&sk, &ct_b) != ss_b;
     // C. Garbage matrix: {zero, FF} sk × {zero, FF} ct — no panic, never
     // equals a legitimate `ss`.
-    let sks = [hypg_kem::SecretKey([0u8; 864]), hypg_kem::SecretKey([0xFFu8; 864])];
+    let sks = [hypg_kem::SecretKey([0u8; SK_LEN]), hypg_kem::SecretKey([0xFFu8; SK_LEN])];
     let cts = [hypg_kem::Ciphertext([0u8; CT_LEN]), hypg_kem::Ciphertext([0xFFu8; CT_LEN])];
     let mut garbage_ok = true;
     for skg in &sks {
@@ -391,8 +394,8 @@ const BIG: usize = 1 << 20;
 fn s11b() -> (bool, String) {
     use hypg_ds::{ds_keygen, ds_sign, ds_verify, SIG_LEN};
     use hypg_symm::{open, seal, Key, Nonce, KEY_LEN, NONCE_LEN, TAG_LEN};
-    // D. DS reserved-pad flips at all 12 layer offsets must reject.
-    // Pad `l` starts at `32 + 7680 + l*2312`.
+    // D. DS reserved-pad flips at all layer offsets must reject.
+    // Pad `l` starts at `N + FORS_SIG_LEN + l*XMSS_SIG_LEN`.
     let (dpk, dsk) = ds_keygen(&[0x43u8; 32]);
     let dmsg = b"redteam s11 ds";
     #[allow(clippy::large_stack_arrays)]
@@ -403,9 +406,11 @@ fn s11b() -> (bool, String) {
         return (false, "s11 valid ds signature rejected".to_string());
     }
     let mut l = 0usize;
-    while l < 12 {
+    while l < hypg_ds::params::D {
         let mut bad = dsig.clone();
-        bad[32 + 7680 + l * 2312] ^= 0x01;
+        bad[hypg_ds::params::N
+            + hypg_ds::params::FORS_SIG_LEN
+            + l * hypg_ds::params::XMSS_SIG_LEN] ^= 0x01;
         if ds_verify(&dpk, dmsg, &bad[..]) {
             pad_holds += 1;
         }
@@ -444,7 +449,13 @@ fn s11b() -> (bool, String) {
     ct_big[BIG - 1] ^= 0x80;
     let big_tamper = open(&akey, &anonce, b"big-ad", &ct_big, &tag_big, &mut back_big).is_none();
     let ok = pad_holds == 0 && multi_ok && big_ok && big_tamper;
-    (ok, format!("pad_held={pad_holds}/12 multi={multi_ok} big1m={big_ok} big_tamper={big_tamper}"))
+    (
+        ok,
+        format!(
+            "pad_held={pad_holds}/{} multi={multi_ok} big1m={big_ok} big_tamper={big_tamper}",
+            hypg_ds::params::D
+        ),
+    )
 }
 
 /// `S11`: combined adversarial mega-suite (A–F across [`s11a`], [`s11b`]).
@@ -473,7 +484,7 @@ impl Corpus {
 
 /// `S12`: adversarial corpus over every fallible/total API — KEM
 /// `encaps`/`decaps` (300 cases), AEAD `seal`/`open` (700 cases),
-/// `ds_verify` (12 cases incl. random 35 KB blobs). Nothing may panic;
+/// `ds_verify` (12 cases incl. random ~50 KB blobs). Nothing may panic;
 /// round-trip and fail-closed contracts must hold.
 /// `S12a`: KEM corpus — random keys/ciphertexts must not panic; the
 /// honest pair inside the loop must always round-trip.

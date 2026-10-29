@@ -87,13 +87,13 @@ fn encaps_bad_pk_length_exit_2() {
 
 #[test]
 fn encaps_bad_pk_char_exit_2() {
-    let out = run(&["encaps", &hex_of(0x42, 800).replace('4', "z")]);
+    let out = run(&["encaps", &hex_of(0x42, 1568).replace('4', "z")]);
     assert_eq!(code_of(&out), 2);
 }
 
 #[test]
 fn decaps_wrong_sk_length_exit_2() {
-    let out = run(&["decaps", &hex_of(0x42, 32), &hex_of(0x11, 800)]);
+    let out = run(&["decaps", &hex_of(0x42, 32), &hex_of(0x11, 1440)]);
     assert_eq!(code_of(&out), 2);
 }
 
@@ -227,6 +227,6 @@ fn decaps_garbage_ct_exit_0_and_differs() {
     assert_eq!(code_of(&out), 0);
     assert_ne!(stdout_field(&out, "ss="), honest);
     // Zero key is valid input too (fixed-point check, no panic).
-    let out = run(&["decaps", &hex_of(0x00, 864), &hex_of(0x00, 800)]);
+    let out = run(&["decaps", &hex_of(0x00, 1632), &hex_of(0x00, 1440)]);
     assert_eq!(code_of(&out), 0);
 }

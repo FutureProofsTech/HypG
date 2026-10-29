@@ -2,27 +2,27 @@
 //!
 //! `no_std`, zero-dependency, `forbid(unsafe_code)`.
 //!
-//! ## v0.4 trapdoor (Module-LWE, Kyber-class; unchanged from v0.3)
+//! ## v2.0 hardened profile (Module-LWE, Category-5 dimensions)
 //!
-//! Module rank `k = 2`, ring `R_q = Z_q[X]/(X^256+1)`, `q = 2^12`.
-//! Public key `pk = seed_a(32) || pack12(b_vec)(768)` with
-//! `b = A·s + e` (`A` is `2×2` uniform from `seed_a`).
-//! Ciphertext `ct = pack10(c1_vec)(640) || pack5(c2)(160)` with
+//! Module rank `k = 4`, ring `R_q = Z_q[X]/(X^256+1)`, `q = 2^12`.
+//! Public key `pk = seed_a(32) || pack12(b_vec)(1536)` with
+//! `b = A·s + e` (`A` is `4×4` uniform from `seed_a`).
+//! Ciphertext `ct = pack10(c1_vec)(1280) || pack5(c2)(160)` with
 //! `c1 = A^T·r + e1`, `c2 = b^T·r + e2 + encode(m)` (1 bit/coeff).
 //! Fujisaki-Okamoto with implicit rejection: `r,e1,e2 = CA-PRF(m, pk)`,
 //! `ss = KDF(m || ct || pk_hash)`.
 //!
 //! The CA stays on every path: all randomness is expanded through
 //! `CA-PRF` (32 branchless CA rounds + BLAKE3 outer hash, uniform in the
-//! ROM). Recovering `m` from `(pk, ct)` requires solving 512-dimensional
+//! ROM). Recovering `m` from `(pk, ct)` requires solving 1024-dimensional
 //! Module-LWE, not evaluating a public KDF.
 //!
-//! v0.7: all hashes/XOF/KDF moved from SHA3 to BLAKE3 (domains now
-//! `HYP-G/v07/...`); lattice parameters unchanged.
-//!
-//! Parameters target Kyber-512-class hardness with power-of-two `q`
-//! (branchless mask-only reduction, no Barrett division).
-//! **Prototype**: pending lattice-estimator confirmation + audit.
+//! v2.0 keeps the v0.7 hash/XOF/KDF domains (`HYP-G/v07/...`) so the
+//! primitive boundary is unchanged; the lattice dimension is the only
+//! wire-format change. Parameters target NIST Category-5 *dimensions*
+//! with power-of-two `q` (branchless mask-only reduction, no Barrett
+//! division).
+//! **Research prototype**: pending lattice-estimator confirmation + audit.
 //! See `docs/spec.md`.
 
 #![no_std]
@@ -36,7 +36,7 @@ use hypg_core::params::{
     B_PACKED_LEN, C1_VEC_PACKED_LEN, C2_PACKED_LEN, CBD_RAND_LEN, CT_LEN, FAKE_LEN, MODULE_K,
     MSG_LEN, PK_LEN, POLY_PACKED_LEN, SEED_LEN, SK_LEN, SS_LEN,
 };
-use hypg_core::poly::{cbd_eta2, dot2, Poly};
+use hypg_core::poly::{cbd_eta2, dot, Poly};
 
 // Domain separators (all public, ASCII, unique per use).
 const D_SEED_A: &[u8] = b"HYP-G/v07/seed-a";
@@ -51,15 +51,15 @@ const D_RSEED: &[u8] = b"HYP-G/v07/r-seed";
 const D_SS: &[u8] = b"HYP-G/v07/ss";
 const D_REJECT: &[u8] = b"HYP-G/v07/reject";
 
-/// Public key: `seed_a(32) || pack12(b_vec)(768)` = 800 bytes.
+/// Public key: `seed_a(32) || pack12(b_vec)(1536)` = 1568 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicKey(pub [u8; PK_LEN]);
 
-/// Secret key: `seed(32) || fake(32) || pk(800)` = 864 bytes.
+/// Secret key: `seed(32) || fake(32) || pk(1568)` = 1632 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SecretKey(pub [u8; SK_LEN]);
 
-/// Ciphertext: `pack10(c1_vec)(640) || pack5(c2)(160)` = 800 bytes.
+/// Ciphertext: `pack10(c1_vec)(1280) || pack5(c2)(160)` = 1440 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ciphertext(pub [u8; CT_LEN]);
 
@@ -185,7 +185,7 @@ fn parse_pk(pk: &[u8; PK_LEN]) -> ([u8; SEED_LEN], [Poly; MODULE_K]) {
     (seed_a, b)
 }
 
-/// Public matrix `A` (`2×2` polys) from `seed_a` via `CA-PRF`.
+/// Public matrix `A` (`4×4` polys) from `seed_a` via `CA-PRF`.
 /// Layout `mat[row][col]`; encryption uses the transpose.
 fn poly_a_mat(seed_a: &[u8; SEED_LEN]) -> [[Poly; MODULE_K]; MODULE_K] {
     let mut buf = [0u8; MODULE_K * MODULE_K * POLY_PACKED_LEN];
@@ -265,7 +265,8 @@ fn cbd_from_buf(buf128: &[u8; CBD_RAND_LEN]) -> Poly {
 fn derive_rand(m: &[u8; MSG_LEN], pk: &[u8; PK_LEN]) -> ([Poly; MODULE_K], [Poly; MODULE_K], Poly) {
     let mut rseed = [0u8; SEED_LEN];
     {
-        let mut buf = [0u8; 896];
+        // `MSG_LEN + PK_LEN + D_RSEED.len()` is public geometry.
+        let mut buf = [0u8; MSG_LEN + PK_LEN + 32];
         let mut o = 0usize;
         let mut i = 0usize;
         while i < MSG_LEN {
@@ -326,17 +327,22 @@ fn pke_encrypt(
     let mut row = 0usize;
     while row < MODULE_K {
         // Row `row` of `A^T` is column `row` of `A`.
-        let t = mat[0][row].mul(&r[0]).add(&mat[1][row].mul(&r[1]));
+        let mut t = Poly::zero();
+        let mut i = 0usize;
+        while i < MODULE_K {
+            t = t.add(&mat[i][row].mul(&r[i]));
+            i += 1;
+        }
         c1[row] = t.add(&e1[row]);
         row += 1;
     }
     // `c2 = b^T·r + e2 + encode(m)`.
-    let bt_r = dot2(&b_vec[0], &b_vec[1], &r[0], &r[1]);
+    let bt_r = dot(b_vec, r);
     let c2 = bt_r.add(e2).add(&Poly::encode(m));
     (c1, c2)
 }
 
-/// Pack `(c1_vec, c2)` with compression into 800-byte `ct`.
+/// Pack `(c1_vec, c2)` with compression into the fixed-size `ct`.
 fn pack_ct(c1: &[Poly; MODULE_K], c2: &Poly) -> [u8; CT_LEN] {
     let mut ct = [0u8; CT_LEN];
     let mut k = 0usize;
@@ -413,7 +419,7 @@ pub fn keygen(seed: &[u8; SEED_LEN]) -> (PublicKey, SecretKey) {
     let mut b = [Poly::zero(); MODULE_K];
     let mut row = 0usize;
     while row < MODULE_K {
-        let t = dot2(&mat[row][0], &mat[row][1], &s[0], &s[1]);
+        let t = dot(&mat[row], &s);
         b[row] = t.add(&e[row]);
         row += 1;
     }
@@ -484,7 +490,7 @@ pub fn decaps(sk: &SecretKey, ct: &Ciphertext) -> SharedSecret {
 
     // Decrypt: `v = c2 - s^T·c1`, decode to `m'`.
     let (c1, c2) = unpack_ct(&ct.0);
-    let st_c1 = dot2(&s[0], &s[1], &c1[0], &c1[1]);
+    let st_c1 = dot(&s, &c1);
     let m_cand = c2.sub(&st_c1).decode();
 
     // Re-encryption check (FO): recompute `ct'` from `m'`.

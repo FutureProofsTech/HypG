@@ -17,13 +17,13 @@ caller's buffers, so nothing is copied and lifetimes are checked).
 
 ## 2. What parallelizes (DS signing)
 
-One DS signature = digest (µs, serial) + 12 full XMSS tree builds +
-30 FORS tree builds (~90% of time, pairwise independent) + fast serial
-assembly (12 WOTS signs, climbs, serialize). The trees do not depend on
+One DS signature = digest (µs, serial) + 17 full XMSS tree builds +
+35 FORS tree builds (~90% of time, pairwise independent) + fast serial
+assembly (17 WOTS signs, climbs, serialize). The trees do not depend on
 each other — only on `(esk, pubseed, indices)` fixed by the digest —
 so any schedule computes the same bytes.
 
-`hypg-mt::mt_sign` runs the 42 builds on scoped workers (strided
+`hypg-mt::mt_sign` runs the 52 builds on scoped workers (strided
 assignment: worker `w` takes units `w, w+W, …`, balancing the ~100×
 XMSS/FORS cost skew), joins, then assembles in index order. The serial
 `ds_sign` is unchanged and remains canonical (KATs, `no_std` targets).
@@ -48,8 +48,9 @@ XMSS/FORS cost skew), joins, then assembles in index order. The serial
   detached threads, no `'static` smuggling.
 - Each worker owns its chunk (`Vec<Unit>` moved in) and returns owned
   results. The only shared borrows are `&` (read-only key material).
-  `Send` holds throughout because every type is owned arrays/`u32`/`u64`
-  — no `Rc`, `RefCell`, or interior mutability exists in the tree.
+  `Send` holds throughout because every type is owned arrays/`u32`/
+  `u64`/`u128` — no `Rc`, `RefCell`, or interior mutability exists in
+  the tree.
 - The compiler checks all of this; there is no `unsafe`, no mutex, no
   atomics. The audit surface for concurrency is this page plus 60 lines
   of orchestration.
@@ -58,10 +59,11 @@ XMSS/FORS cost skew), joins, then assembles in index order. The serial
 
 `worker_count()` = `available_parallelism()` clamped to `[1, 64]`,
 overridable with `HYPG_MT_WORKERS` (tests pin 1/2/64). Measured on
-i5-14400F (16 threads): serial ≈ 65 ms → threaded ≈ 12 ms (**5.5×**).
-Scaling is sublinear (serial digest/assembly + wave quantization), and
-oversubscription past core count adds nothing — the clamp exists so a
-64-core server doesn't spawn silly thread counts for a 42-unit wave.
+i5-14400F (16 threads): serial ≈ 45.7 ms → threaded ≈ 12.6 ms
+(**3.6×**). Scaling is sublinear (serial digest/assembly + wave
+quantization), and oversubscription past core count adds nothing — the
+clamp exists so a 64-core server doesn't spawn silly thread counts for
+a 52-unit wave.
 
 ## 6. Deliberate non-goals
 
@@ -69,7 +71,7 @@ oversubscription past core count adds nothing — the clamp exists so a
 - No parallel KEM (ops are µs-scale; thread overhead would dominate —
   batch across operations in your own code instead: `ds_sign`-style
   entry points are all pure and `Send`-safe to call from scopes).
-- No parallel verification fast path needed (verify is already ~30×
+- No parallel verification fast path needed (verify is already ~20×
   faster than serial sign; threading it would complicate the
   timing-independence story for single-digit-ms gains).
 - No cross-signature caching (statefulness + cache-timing surface;

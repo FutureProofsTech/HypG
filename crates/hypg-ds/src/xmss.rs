@@ -1,16 +1,16 @@
-//! XMSS Merkle layer (`h' = 5`, 32 WOTS+ keypairs).
+//! XMSS Merkle layer (`h' = 4`, 16 WOTS+ keypairs).
 //!
 //! Addresses: layer/tree carried in `base`; per-keypair WOTS base sets
 //! the keypair index. TREE-type nodes carry `(height, index)`.
 
 use crate::addr::{Addr, T_TREE};
-use crate::params::{HP, LEAVES, N};
+use crate::params::{HP, LEAVES, N, WOTS_LEN};
 use crate::thash::h;
 use crate::wots;
 
-/// XMSS public root from secret (builds the full 32-leaf tree).
+/// XMSS public root from secret (builds the full 16-leaf tree).
 #[must_use]
-pub fn xmss_pk(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u64) -> [u8; N] {
+pub fn xmss_pk(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u128) -> [u8; N] {
     let mut level = [[0u8; N]; LEAVES];
     let mut i = 0u32;
     while (i as usize) < LEAVES {
@@ -21,7 +21,7 @@ pub fn xmss_pk(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u64) -> [u8; 
 }
 
 /// WOTS+ L-tree leaf for keypair `idx`.
-fn leaf_pk(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u64, idx: u32) -> [u8; N] {
+fn leaf_pk(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u128, idx: u32) -> [u8; N] {
     let mut base = Addr::zero();
     base.set_layer(layer);
     base.set_tree(tree);
@@ -37,9 +37,9 @@ fn leaf_keypair(
     pubseed: &[u8; N],
     esk: &[u8; N],
     layer: u32,
-    tree: u64,
+    tree: u128,
     idx: u32,
-) -> ([[u8; N]; 67], [u8; N]) {
+) -> ([[u8; N]; WOTS_LEN], [u8; N]) {
     let mut base = Addr::zero();
     base.set_layer(layer);
     base.set_tree(tree);
@@ -49,8 +49,13 @@ fn leaf_keypair(
     (sk, wots::ltree(pubseed, &pk, &base))
 }
 
-/// Merkle root over 32 leaves in place.
-fn merkle_root(pubseed: &[u8; N], level: &mut [[u8; N]; LEAVES], layer: u32, tree: u64) -> [u8; N] {
+/// Merkle root over `LEAVES` leaves in place.
+fn merkle_root(
+    pubseed: &[u8; N],
+    level: &mut [[u8; N]; LEAVES],
+    layer: u32,
+    tree: u128,
+) -> [u8; N] {
     let mut width = LEAVES;
     let mut height = 0u32;
     while width > 1 {
@@ -73,20 +78,20 @@ fn merkle_root(pubseed: &[u8; N], level: &mut [[u8; N]; LEAVES], layer: u32, tre
     level[0]
 }
 
-/// XMSS signature: WOTS sig at `idx` plus 5-node auth path.
+/// XMSS signature: WOTS sig at `idx` plus `HP`-node auth path.
 #[must_use]
 pub fn xmss_sign(
     pubseed: &[u8; N],
     esk: &[u8; N],
     layer: u32,
-    tree: u64,
+    tree: u128,
     idx: u32,
     msg: &[u8; N],
-) -> ([[u8; N]; 67], [[u8; N]; HP]) {
-    // Full tree (32 leaves) — simple and stack-resident. The signed
+) -> ([[u8; N]; WOTS_LEN], [[u8; N]; HP]) {
+    // Full tree (`LEAVES` leaves) — simple and stack-resident. The signed
     // leaf's secret is kept for signing below (saves one regeneration).
     let mut level = [[0u8; N]; LEAVES];
-    let mut leaf_sk = [[0u8; N]; 67];
+    let mut leaf_sk = [[0u8; N]; WOTS_LEN];
     let mut i = 0u32;
     while (i as usize) < LEAVES {
         if i == idx {
@@ -134,13 +139,13 @@ pub fn xmss_sign(
     (sig, auth)
 }
 
-/// Build all 32 WOTS L-tree leaves of one XMSS tree.
+/// Build all `LEAVES` WOTS L-tree leaves of one XMSS tree.
 ///
 /// Parallel building block for threaded signers (`hypg-mt`): leaf builds
 /// are pure functions of `(pubseed, esk, layer, tree)` and independent.
 /// Byte-identical to the leaves `xmss_sign` builds internally.
 #[must_use]
-pub fn xmss_build(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u64) -> [[u8; N]; LEAVES] {
+pub fn xmss_build(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u128) -> [[u8; N]; LEAVES] {
     let mut level = [[0u8; N]; LEAVES];
     let mut i = 0u32;
     while (i as usize) < LEAVES {
@@ -158,11 +163,11 @@ pub fn xmss_sign_with_leaves(
     pubseed: &[u8; N],
     esk: &[u8; N],
     layer: u32,
-    tree: u64,
+    tree: u128,
     idx: u32,
     msg: &[u8; N],
     leaves: &[[u8; N]; LEAVES],
-) -> ([[u8; N]; 67], [[u8; N]; HP]) {
+) -> ([[u8; N]; WOTS_LEN], [[u8; N]; HP]) {
     let mut base = Addr::zero();
     base.set_layer(layer);
     base.set_tree(tree);
@@ -203,10 +208,10 @@ pub fn xmss_sign_with_leaves(
 pub fn xmss_verify(
     pubseed: &[u8; N],
     layer: u32,
-    tree: u64,
+    tree: u128,
     idx: u32,
     msg: &[u8; N],
-    sig: &[[u8; N]; 67],
+    sig: &[[u8; N]; WOTS_LEN],
     auth: &[[u8; N]; HP],
 ) -> [u8; N] {
     let mut base = Addr::zero();
@@ -254,17 +259,17 @@ mod tests {
 
     #[test]
     fn idx_boundaries_round_trip() {
-        // Edge leaves: all-left (`0`) and all-right (`31`) auth-path
+        // Edge leaves: all-left (`0`) and all-right (`LEAVES - 1`) auth-path
         // climbs — the classic off-by-one sites for sibling selection.
         let ps = [0x51u8; N];
         let esk = [0x52u8; N];
         let msg = [0x53u8; N];
         let root = xmss_pk(&ps, &esk, 0, 7);
-        for idx in [0u32, 31] {
+        for idx in [0u32, u32::try_from(LEAVES - 1).unwrap_or(0)] {
             let (sig, auth) = xmss_sign(&ps, &esk, 0, 7, idx, &msg);
             assert_eq!(xmss_verify(&ps, 0, 7, idx, &msg, &sig, &auth), root, "boundary idx {idx}");
             // Neighbor index must not verify to the same root.
-            let wrong = if idx == 0 { 1 } else { 30 };
+            let wrong = if idx == 0 { 1 } else { u32::try_from(LEAVES - 2).unwrap_or(0) };
             assert_ne!(xmss_verify(&ps, 0, 7, wrong, &msg, &sig, &auth), root);
         }
     }
@@ -276,7 +281,7 @@ mod tests {
         let ps = [0x51u8; N];
         let esk = [0x52u8; N];
         let msg = [0x53u8; N];
-        for idx in [0u32, 1, 17, 31] {
+        for idx in [0u32, 1, 7, u32::try_from(LEAVES - 1).unwrap_or(0)] {
             let (s1, a1) = xmss_sign(&ps, &esk, 2, 9, idx, &msg);
             let leaves = xmss_build(&ps, &esk, 2, 9);
             let (s2, a2) = xmss_sign_with_leaves(&ps, &esk, 2, 9, idx, &msg, &leaves);

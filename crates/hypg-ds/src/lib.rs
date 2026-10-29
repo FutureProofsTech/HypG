@@ -6,12 +6,13 @@
 //! via keyed BLAKE3 and `CA-PRF` addressing. See `docs/spec-ds.md`
 //! for parameters, the constant-time rule (WOTS+ chains always run all
 //! `w − 1` steps with branchless select), and the honest security position
-//! (128-bit PQ target, closed-form bounds cited, auditor must confirm).
+//! (NIST Category-5 dimensions, closed-form bounds cited, auditor must
+//! confirm; not a security certification).
 
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-//! Fixed protocol buffers (35 KB signatures, 128-leaf tree levels) live on
+//! Fixed protocol buffers (~50 KB signatures, 16-leaf tree levels) live on
 //! the stack by policy: heap allocation is banned, so `large_stack_arrays`
 //! is the intended shape, not an accident.
 #![allow(clippy::large_stack_arrays)]

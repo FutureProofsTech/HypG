@@ -1,6 +1,6 @@
 # HypG-AEAD v0.7 Normative Spec (streaming front)
 
-Status: **FROZEN for 1.0**.
+Status: **FROZEN for 2.0**.
 Platinum: `no_std`, zero dependencies, bit-exact LE.
 
 ## 0. Position: same construction, different schedule

@@ -1,24 +1,28 @@
-# HypG Threat Model (frozen for v1.0; parameters v0.7/v0.6)
+# HypG Threat Model (frozen for v2.0; parameters v2.0)
 
 ## Goals
 
-- IND-CCA2 KEM at Kyber-512-class hardness (Module-LWE `n = 256`,
-  `k = 2`, dim 512, `q = 2^12`, `eta = 2`), branchless deterministic
-  `no_std` execution, `pk = ct = 800 B`.
+- IND-CCA2 KEM at NIST Category-5 *dimensions* (Module-LWE `n = 256`,
+  `k = 4`, dim 1024, `q = 2^12`, `eta = 2`), branchless deterministic
+  `no_std` execution, `pk = 1568 B`, `ct = 1440 B`.
 - BLAKE3 hashing/XOF/KDF used as designed (oracle-validated, no custom
   symmetric modes); ChaCha20 + keyed-BLAKE3 EtM AEAD (one-shot and
-  streaming, wire-identical); SLH-shaped hash-based signatures.
+  streaming, wire-identical); SLH-DSA-256f-shaped hash-based signatures
+  (`h = 68`, `d = 17`, FORS `35×9`).
 - The original `<256 B` target is **retired**: incompatible with 128-bit
   PQ at current knowledge (all NIST finalists exceed it).
 
-## What changed in v0.3
+## What changed in v2.0
 
-- Scaled v0.2's toy ring (`n = 64`) to module rank 2 over `X^256+1`.
-  Message encoding relaxed from 4 bits/coeff to 1 bit/coeff (spacing
-  2048, threshold 1024) — far larger noise margin, negligible failure.
-- `c2` compression `12→5` bits (160 B), `c1` stays `12→10` (320 B/poly).
+- Module rank raised from `k = 2` to `k = 4` (lattice dimension 512 →
+  1024). `pk`/`ct` grow to 1568/1440 B; this is a breaking wire-format
+  change.
+- Signature profile raised to the SLH-DSA-256f shape: `h = 68`, `d = 17`,
+  `h' = 4`, FORS `(35,9)`, `sig = 49992 B`.
 - Power-of-two `q = 4096` retained instead of Kyber's `3329` for
   branchless mask-only reduction (no division); documented deviation.
+- v1.0 parameters and KAT files remain in the tree as historical
+  evidence; the active KAT set is `kats*/v2.0.0.txt`.
 
 ## Attacker capabilities assumed
 
@@ -26,11 +30,12 @@
 - Classical: CPA/CCA oracles, timing + cache observation.
 - Supply-chain: zero deps to compromise.
 
-## Explicit non-goals / disclaimers (frozen for v1.0)
+## Explicit non-goals / disclaimers (frozen for v2.0)
 
-1. **No confirmed bit-security.** Kyber-class dimensions suggest
-   `~100+`-bit classical hardness, but the lattice-estimator run and
-   independent parameter review are still backlog. Do not deploy.
+1. **No confirmed bit-security.** Category-5 dimensions put the KEM in
+   the Kyber-1024 neighbourhood, but the larger `q` changes the lattice
+   profile and the estimator run and independent parameter review are
+   still backlog. Do not deploy.
 2. **No undecidability-based security.** As in all versions: bounded CA
    is decidable; security is argued from Module-LWE + ROM only.
 3. **No side-channel immunity.** Branchless timing posture only; no
@@ -48,16 +53,16 @@
 
 ## Abuse cases to block before release
 
-- Deploying v1.0 in production. → crate docs + SECURITY.md warnings.
+- Deploying v2.0 in production. → crate docs + SECURITY.md warnings.
 - Shrinking `(n, k)` or `eta` to regain `<256 B`. → spec forbids; CI pins KATs.
 - Adding deps/`unsafe` (e.g. fast NTT). → CI denies; NTT stays naive `O(n²)`.
 - Inventing symmetric modes (sponge, truncated tags). → README non-goals; CI pins KATs.
 
-## 1.0 sign-off (2026-09-29, local review)
+## 2.0 sign-off (2026-10-30, local review)
 
 - Abuse cases above re-checked: warnings present (README, SECURITY.md,
   all spec statuses `FROZEN`, crate docs); KAT pinning green (4 frozen
-  files); hygiene gates deny deps/`unsafe`/`panic!`/`unwrap`.
+  v2.0.0 files); hygiene gates deny deps/`unsafe`/`panic!`/`unwrap`.
 - Residual risks accepted as documented, not resolved: unconfirmed
   bit-security (`estimator.md`), no lab side-channels, no human audit.
   The freeze certifies *process completeness* (everything on the local

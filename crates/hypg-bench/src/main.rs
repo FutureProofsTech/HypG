@@ -10,6 +10,7 @@
 
 use std::time::Instant;
 
+use hypg_core::params::{C1_PACKED_LEN, C1_VEC_PACKED_LEN, CT_LEN};
 use hypg_kem::{decaps, encaps, keygen};
 use hypg_symm::{open, seal, Key, Nonce, TAG_LEN};
 
@@ -278,16 +279,16 @@ fn ds_profile() {
     let _ = wots::ltree(&ps, &pk, &base);
     println!("profile: wots_key_us = {}", t.elapsed().as_micros());
 
-    // One XMSS layer public key (32 WOTS keys + tree).
+    // One XMSS layer public key (LEAVES WOTS keys + tree).
     let t = Instant::now();
     let _ = xmss::xmss_pk(&ps, &esk, 0, 0);
     println!("profile: xmss_pk_layer_us = {}", t.elapsed().as_micros());
 
     // FORS sign + verify round.
-    let mut idx = [0u32; 30];
+    let mut idx = [0u32; hypg_ds::params::FORS_K];
     let mut k = 0u32;
-    while k < 30 {
-        idx[k as usize] = (k * 37 + 11) & 127;
+    while (k as usize) < hypg_ds::params::FORS_K {
+        idx[k as usize] = (k * 37 + 11) & hypg_ds::params::FORS_T_MASK;
         k += 1;
     }
     let t = Instant::now();
@@ -393,8 +394,13 @@ fn main() {
     if tn > 0 {
         // Sweep tamper positions: c1 head/mid, c2 head/mid, last byte.
         // A position-dependent split would implicate a specific decode path.
-        let spots: [(&str, usize); 5] =
-            [("c1[0]", 0), ("c1[320]", 320), ("c2[0]", 640), ("c2[80]", 720), ("ct[799]", 799)];
+        let spots: [(&str, usize); 5] = [
+            ("c1[0]", 0),
+            ("c1[320]", C1_PACKED_LEN),
+            ("c2[0]", C1_VEC_PACKED_LEN),
+            ("c2[80]", C1_VEC_PACKED_LEN + 80),
+            ("ct[last]", CT_LEN - 1),
+        ];
         for (name, pos) in spots {
             let mut bad_spot = ct;
             bad_spot.0[pos] ^= 0x01;

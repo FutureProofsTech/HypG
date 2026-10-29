@@ -2,7 +2,7 @@
 //!
 //! `no_std`, zero-dependency, `forbid(unsafe_code)`.
 //!
-//! Prototype, frozen at v1.0, unaudited — do not deploy. See
+//! Hardened research profile v2.0, unaudited — do not deploy. See
 //! `docs/threat-model.md`.
 //!
 //! Thin ergonomic API over the oracle-validated portable BLAKE3 in

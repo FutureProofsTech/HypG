@@ -10,20 +10,22 @@
 \newtheorem{prop}{Proposition}[section]
 
 \title{HypG: Formal Specification\\[0.5ex]
-\large Yellow Paper --- Normative Algorithms, Parameters, and Contracts (v1.0)}
+\large Yellow Paper --- Normative Algorithms, Parameters, and Contracts (v2.0)}
 \author{HypG Project}
-\date{September 2026}
+\date{October 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This document normatively specifies HypG v1.0: parameters, algorithms,
+This document normatively specifies HypG v2.0: parameters, algorithms,
 sizes, domain strings, API contracts, and test-vector inventory.  It is
 the frozen companion to the implementation; in case of divergence, the
-frozen KAT files decide.  Parameters are unchanged since v0.7
-(KEM/AEAD/hash) and v0.6 (signatures).  This paper makes no security
-claim --- see the White Paper and \texttt{docs/threat-model.md}.
+frozen KAT files decide.  v2.0 is a breaking parameter-hardening
+release (KEM $k=4$; signatures in the 256f shape).  The
+\texttt{HYP-G/v07/...} domains and symmetric primitives are unchanged.
+This paper makes no security claim --- see the White Paper and
+\texttt{docs/threat-model.md}.
 \end{abstract}
 
 \tableofcontents
@@ -48,20 +50,20 @@ target (stated goal, unconfirmed).  ``Public'' means attacker-visible
 Symbol & Value & Meaning \\
 \midrule
 $n$ & 256 & ring dimension, $R_q = \mathbb{Z}_q[X]/(X^{256}+1)$ \\
-$k$ & 2 & module rank (lattice dimension 512) \\
+$k$ & 4 & module rank (lattice dimension 1024) \\
 $q$ & $2^{12} = 4096$ & cipher modulus (mask-only reduction) \\
 $\eta$ & 2 & CBD parameter, coefficients in $\{-2,\ldots,2\}$ \\
 $msg$ & 32 B & FO message (1 bit/coefficient encoding) \\
-$PK$ & 800 B & $\mathit{seed}_A(32) \,\|\, \mathrm{pack}_{12}(b)(768)$ \\
-$CT$ & 800 B & $\mathrm{pack}_{10}(c_1)(640) \,\|\, \mathrm{pack}_{5}(c_2)(160)$ \\
-$SK$ & 864 B & $\mathit{seed}(32) \,\|\, \mathit{fake}(32) \,\|\, pk(800)$ \\
+$PK$ & 1568 B & $\mathit{seed}_A(32) \,\|\, \mathrm{pack}_{12}(b)(1536)$ \\
+$CT$ & 1440 B & $\mathrm{pack}_{10}(c_1)(1280) \,\|\, \mathrm{pack}_{5}(c_2)(160)$ \\
+$SK$ & 1632 B & $\mathit{seed}(32) \,\|\, \mathit{fake}(32) \,\|\, pk(1568)$ \\
 $SS$ & 32 B & shared secret \\
 $w$ & 16 & WOTS+ base; chains run all $w-1 = 15$ steps \\
 $\ell_{\mathrm{WOTS}}$ & 67 & $64$ message digits $+$ $3$ checksum digits \\
-$K_{\mathrm{FORS}}$ & 30 & FORS trees; leaves per tree $2^7 = 128$ \\
-$D, h$ & 12 layers $\times$ height 5 & hypertree ($60$-bit tree index) \\
-$SIG$ & 35456 B & $R(32) \,\|\, \mathrm{FORS}_{\times 30} \,\|\,
-\mathrm{layers}_{\times 12}$ \\
+$K_{\mathrm{FORS}}$ & 35 & FORS trees; leaves per tree $2^9 = 512$ \\
+$D, h$ & 17 layers $\times$ height 4 & hypertree ($68$-bit tree index) \\
+$SIG$ & 49992 B & $R(32) \,\|\, \mathrm{FORS}_{\times 35} \,\|\,
+\mathrm{layers}_{\times 17}$ \\
 $SIG_{pk}/SIG_{sk}$ & 64 / 128 B & DS public/secret keys \\
 \bottomrule
 \end{tabular}
@@ -100,7 +102,7 @@ exhaustion fails closed and never wraps.
 On $\mathit{seed} \in \{0,1\}^{256}$:
 $\mathit{seed}_A \gets \mathrm{CAExpand}(\mathit{seed},
 \text{seed-a})$;
-$A \gets \mathrm{Uniform}(\mathit{seed}_A)^{2 \times 2}$;
+$A \gets \mathrm{Uniform}(\mathit{seed}_A)^{4 \times 4}$;
 $s, e \gets \mathrm{CBD}_2$ via \texttt{CA-PRF};
 $b \gets A s + e$;
 $pk \gets \mathit{seed}_A \,\|\, \mathrm{pack}_{12}(b)$;
@@ -126,9 +128,9 @@ Never fails; wrong $ct$ yields the pseudorandom reject secret.
 
 \paragraph{Failure analysis.}
 Decode threshold $\pm 1024$ against noise of standard deviation
-$\sim$50: analytic margin $\approx$ $20\sigma$.  Empirically
-20000/20000 clean round-trips (plus 100000 pre-migration on identical
-lattice code).  The 32-trial unit test is a tripwire, not the argument.
+$\sim$60: analytic margin $\approx$ $16\sigma$.  Empirically
+20000/20000 clean round-trips.  The 32-trial unit test is a tripwire,
+not the argument.
 
 %======================================================================
 \section{Hash API}
@@ -173,11 +175,11 @@ the tag (EtM consequence); validity holds only after \texttt{Some}.
 
 Hedged $R \gets \mathrm{PRF}(sk.\mathrm{prf}, m)$;
 $md \gets \mathrm{H}(R \,\|\, \mathit{pubseed} \,\|\, \mathit{root} \,\|\, m)$
-(64 B, streamed, counter-bound); split into 30 $\times$ 7-bit FORS
-indices, 60-bit tree index, 5-bit leaf.  FORS signs per-tree leaves;
-the hypertree climbs 12 XMSS layers (WOTS+ sign + auth path each);
-serialization is $R \,\|\, \mathrm{FORS}_{\times 30} \,\|\,
-\mathrm{layers}_{\times 12}$ with zeroed 8-byte reserved pads per
+(64 B, streamed, counter-bound); split into 35 $\times$ 9-bit FORS
+indices, 68-bit tree index, 4-bit leaf.  FORS signs per-tree leaves;
+the hypertree climbs 17 XMSS layers (WOTS+ sign + auth path each);
+serialization is $R \,\|\, \mathrm{FORS}_{\times 35} \,\|\,
+\mathrm{layers}_{\times 17}$ with zeroed 8-byte reserved pads per
 layer, rejection-checked at verify.  Verify returns false on any
 malformation (length first).  Composition bounds are cited in
 \texttt{docs/spec-ds.md} \S6 (closed-form FORS/WOTS+/XMSS reductions);
@@ -217,15 +219,15 @@ not registry.
 \toprule
 File & Contents & Anchors \\
 \midrule
-\texttt{kats/v0.7.0.txt} & KEM, 3 seeds & BLAKE3(``abc'') \\
-\texttt{kats-symm/v0.7.0.txt} & AEAD, 5 cases & empty/edge/1000 B \\
-\texttt{kats-ds/v0.7.0.txt} & DS, 2 seeds $\times$ 2 msgs & empty + 55 B \\
-\texttt{kats-hash/v0.7.0.txt} & hash32/64, keyed, derive & empty/abc/1025 B \\
+\texttt{kats/v2.0.0.txt} & KEM, 3 seeds & BLAKE3(``abc'') \\
+\texttt{kats-symm/v2.0.0.txt} & AEAD, 5 cases & empty/edge/1000 B \\
+\texttt{kats-ds/v2.0.0.txt} & DS, 2 seeds $\times$ 2 msgs & empty + 55 B \\
+\texttt{kats-hash/v2.0.0.txt} & hash32/64, keyed, derive & empty/abc/1025 B \\
 \bottomrule
 \end{tabular}
 \end{center}
 Byte-exact gates compare renderer output to these files; history
-(v0.4--v0.6) is retained.  Empty/abc/XOF-64 anchors were cross-checked
+(v0.4--v0.7) is retained.  Empty/abc/XOF-64 anchors were cross-checked
 against third-party BLAKE3 bindings at freeze time.
 
 %======================================================================
@@ -246,9 +248,10 @@ are public.  Debug renderings of key-holding types are redacted;
 
 129 tests (96 unit, 20 CLI failure-path integration, 13 doc-tests) on
 stable debug/release and MSRV 1.70; redteam S1--S14 (incl.\ full
-6400-bit malleability, 20000-trial failure sweep, 1011-case panic
-corpus, streaming games); lattice L1--L5; Miri clean (core/symm/KEM);
-Welch t-test max $|t| \approx 1.23$ at $n = 10000$ (informational).
+11520-bit malleability, 20000-trial failure sweep, 1011-case panic
+corpus, streaming games); lattice L1--L5; Miri clean on v2.0 core/symm
+(KEM re-run pending); timing medians recorded as
+per-mille smoke tests (informational).
 Full matrix: \texttt{docs/testplan.md}.
 
 \medskip

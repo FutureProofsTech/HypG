@@ -2,7 +2,7 @@
 //!
 //! `md[64]` via BLAKE3 streaming over `R ‖ pubseed ‖ root ‖ msg-digest`
 //! (arbitrary message lengths, no concatenation buffers). Digest bits:
-//! FORS `30×7`, tree `60`, leaf `5` (275 bits of 512). Deterministic:
+//! FORS `35×9`, tree `68`, leaf `4` (387 bits of 512). Deterministic:
 //! same `(sk, msg)` → same `sig`.
 
 use hypg_core::b3::{b3_hash, Hasher};
@@ -11,7 +11,7 @@ use hypg_core::ct::zeroize;
 
 use crate::fors::{self, ForsSig};
 use crate::hypertree::{self, LayerSig};
-use crate::params::{FORS_K, N, SIG_LEN, SIG_PK_LEN, SIG_SK_LEN};
+use crate::params::{D, FORS_A, FORS_K, H, HP, N, SIG_LEN, SIG_PK_LEN, SIG_SK_LEN, WOTS_LEN};
 
 const D_ADDRND: &[u8] = b"HYP-G/v07/ds-addrnd";
 const D_MSGHASH: &[u8] = b"HYP-G/v07/ds-msghash";
@@ -117,30 +117,33 @@ fn md_bit(md: &[u8; 64], pos: usize) -> u32 {
     u32::from((md[pos / 8] >> (pos % 8)) & 1)
 }
 
-/// Split digest: 30 FORS indices (7 bits), 60-bit tree index, 5-bit leaf.
-fn split(md: &[u8; 64]) -> ([u32; FORS_K], u64, u32) {
+/// Split digest: `FORS_K` FORS indices (`FORS_A` bits each), a
+/// `H`-bit tree index, and an `HP`-bit leaf index.
+fn split(md: &[u8; 64]) -> ([u32; FORS_K], u128, u32) {
     let mut fors = [0u32; FORS_K];
     let mut t = 0usize;
     while t < FORS_K {
         let mut v = 0u32;
         let mut b = 0usize;
-        while b < 7 {
-            v |= md_bit(md, t * 7 + b) << b;
+        while b < FORS_A {
+            v |= md_bit(md, t * FORS_A + b) << b;
             b += 1;
         }
         fors[t] = v;
         t += 1;
     }
-    let mut tree_idx = 0u64;
+    let tree_start = FORS_K * FORS_A;
+    let mut tree_idx = 0u128;
     let mut b = 0usize;
-    while b < 60 {
-        tree_idx |= u64::from(md_bit(md, 210 + b)) << b;
+    while b < H {
+        tree_idx |= u128::from(md_bit(md, tree_start + b)) << b;
         b += 1;
     }
+    let leaf_start = tree_start + H;
     let mut leaf = 0u32;
     b = 0;
-    while b < 5 {
-        leaf |= md_bit(md, 270 + b) << b;
+    while b < HP {
+        leaf |= md_bit(md, leaf_start + b) << b;
         b += 1;
     }
     (fors, tree_idx, leaf)
@@ -185,11 +188,11 @@ pub struct PreSign {
     pub esk: [u8; N],
     /// Public seed.
     pub pubseed: [u8; N],
-    /// FORS leaf indices (30 × 7 bits).
+    /// FORS leaf indices (`FORS_K × FORS_A` bits).
     pub fors_idx: [u32; FORS_K],
-    /// Hypertree selector (60 bits).
-    pub tree_idx: u64,
-    /// Bottom-layer leaf index (5 bits).
+    /// Hypertree selector (`H = 68` bits).
+    pub tree_idx: u128,
+    /// Bottom-layer leaf index (`HP` bits).
     pub leaf: u32,
 }
 
@@ -203,13 +206,14 @@ pub fn pre_sign(sk: &SigSk, msg: &[u8]) -> PreSign {
     PreSign { r, esk, pubseed, fors_idx, tree_idx, leaf }
 }
 
-/// Serialize `R ‖ FORS ×30 ‖ layers ×12` into the exact `SIG_LEN` buffer.
-/// Shared by serial and threaded signers (single serialization truth).
+/// Serialize `R ‖ FORS ×FORS_K ‖ layers ×D` into the exact `SIG_LEN`
+/// buffer. Shared by serial and threaded signers (single serialization
+/// truth).
 #[allow(clippy::many_single_char_names)]
 pub fn serialize_sig(
     r: &[u8; N],
     fors_sig: &ForsSig,
-    ht_sig: &[LayerSig; 12],
+    ht_sig: &[LayerSig; D],
     sig_out: &mut [u8; SIG_LEN],
 ) {
     let mut o = 0usize;
@@ -228,7 +232,7 @@ pub fn serialize_sig(
             i += 1;
         }
         let mut h = 0usize;
-        while h < 7 {
+        while h < FORS_A {
             i = 0;
             while i < N {
                 sig_out[o] = fors_sig[t].1[h][i];
@@ -240,7 +244,7 @@ pub fn serialize_sig(
         t += 1;
     }
     let mut l = 0usize;
-    while l < 12 {
+    while l < D {
         let mut i = 0usize;
         while i < 8 {
             sig_out[o] = 0;
@@ -248,7 +252,7 @@ pub fn serialize_sig(
             i += 1;
         }
         let mut c = 0usize;
-        while c < 67 {
+        while c < WOTS_LEN {
             i = 0;
             while i < N {
                 sig_out[o] = ht_sig[l].0[c][i];
@@ -258,7 +262,7 @@ pub fn serialize_sig(
             c += 1;
         }
         let mut h = 0usize;
-        while h < 5 {
+        while h < HP {
             i = 0;
             while i < N {
                 sig_out[o] = ht_sig[l].1[h][i];
@@ -321,7 +325,7 @@ pub fn ds_verify(pk: &SigPk, msg: &[u8], sig: &[u8]) -> bool {
     let md = digest(&r, &pubseed, &root, msg);
     let (fors_idx, tree_idx, leaf) = split(&md);
     let mut o = N;
-    let mut fors_sig: ForsSig = [([0u8; N], [[0u8; N]; 7]); FORS_K];
+    let mut fors_sig: ForsSig = [([0u8; N], [[0u8; N]; FORS_A]); FORS_K];
     let mut t = 0usize;
     while t < FORS_K {
         i = 0;
@@ -331,7 +335,7 @@ pub fn ds_verify(pk: &SigPk, msg: &[u8], sig: &[u8]) -> bool {
             i += 1;
         }
         let mut h = 0usize;
-        while h < 7 {
+        while h < FORS_A {
             i = 0;
             while i < N {
                 fors_sig[t].1[h][i] = sig[o];
@@ -343,9 +347,9 @@ pub fn ds_verify(pk: &SigPk, msg: &[u8], sig: &[u8]) -> bool {
         t += 1;
     }
     let fors_pk = fors::fors_verify(&pubseed, &fors_idx, &fors_sig);
-    let mut ht_sig: [LayerSig; 12] = [([[0u8; N]; 67], [[0u8; N]; 5]); 12];
+    let mut ht_sig: [LayerSig; D] = [([[0u8; N]; WOTS_LEN], [[0u8; N]; HP]); D];
     let mut l = 0usize;
-    while l < 12 {
+    while l < D {
         // Reserved index field: must be zero (non-malleability — an
         // attacker-flippable ignored field would break SUS).
         let mut pad = 0u8;
@@ -359,7 +363,7 @@ pub fn ds_verify(pk: &SigPk, msg: &[u8], sig: &[u8]) -> bool {
             return false;
         }
         let mut c = 0usize;
-        while c < 67 {
+        while c < WOTS_LEN {
             i = 0;
             while i < N {
                 ht_sig[l].0[c][i] = sig[o];
@@ -369,7 +373,7 @@ pub fn ds_verify(pk: &SigPk, msg: &[u8], sig: &[u8]) -> bool {
             c += 1;
         }
         let mut h = 0usize;
-        while h < 5 {
+        while h < HP {
             i = 0;
             while i < N {
                 ht_sig[l].1[h][i] = sig[o];
@@ -388,7 +392,7 @@ pub fn ds_verify(pk: &SigPk, msg: &[u8], sig: &[u8]) -> bool {
 /// Length sanity (public, testable).
 #[must_use]
 pub const fn sizes_ok() -> bool {
-    SIG_LEN == N + FORS_K * 8 * N + 12 * (8 + 67 * N + 5 * N) && SIG_PK_LEN == 64
+    SIG_LEN == N + FORS_K * (FORS_A + 1) * N + D * (8 + WOTS_LEN * N + HP * N) && SIG_PK_LEN == 64
 }
 
 #[cfg(test)]
@@ -413,7 +417,9 @@ mod tests {
         let mut sig = [0u8; SIG_LEN];
         ds_sign(&sk, b"message", &mut sig);
         // Flip each region once: R, FORS leaf, WOTS byte, auth path, pad.
-        for pos in [0usize, 40, 8000, 20000, 35455] {
+        let layer0 = N + FORS_K * (FORS_A + 1) * N;
+        let auth0 = layer0 + 8 + WOTS_LEN * N;
+        for pos in [0usize, 40, layer0, auth0, SIG_LEN - 1] {
             let mut bad = sig;
             bad[pos] ^= 0x01;
             assert!(!ds_verify(&pk, b"message", &bad), "forgery at {pos}");
@@ -445,32 +451,31 @@ mod tests {
 
     #[test]
     fn split_bit_exactness() {
-        // Hand-computed vector (`md_bit` is LSB-first within a byte):
-        // `md[0] = 0xA5` → `fors[0] = 0b0100101 = 37`, `fors[1] = 1`;
-        // `md[26] = 0x04` sets tree bit 210 → `tree_idx = 1`;
-        // `md[33] = 0xC0` sets leaf bits 270,271 → `leaf = 3`.
+        // `md_bit` is LSB-first within a byte. Set one bit per field and
+        // check the three extracted values independently.
         let mut md = [0u8; 64];
-        md[0] = 0xA5;
-        md[26] = 0x04;
-        md[33] = 0xC0;
+        let tree_start = FORS_K * FORS_A;
+        let leaf_start = tree_start + H;
+        md[0] = 0x01; // FORS[0] bit 0
+        md[tree_start / 8] |= 1 << (tree_start % 8); // tree bit 0
+        md[leaf_start / 8] |= 1 << (leaf_start % 8); // leaf bit 0
         let (fors, tree_idx, leaf) = split(&md);
-        assert_eq!(fors[0], 37);
-        assert_eq!(fors[1], 1);
-        let mut t = 2usize;
+        assert_eq!(fors[0], 1);
+        let mut t = 1usize;
         while t < FORS_K {
             assert_eq!(fors[t], 0);
             t += 1;
         }
         assert_eq!(tree_idx, 1);
-        assert_eq!(leaf, 3);
+        assert_eq!(leaf, 1);
         // All-ones digest → maximal indices (bounds, no truncation).
         let (fors_max, tree_max, leaf_max) = split(&[0xFFu8; 64]);
         let mut t = 0usize;
         while t < FORS_K {
-            assert_eq!(fors_max[t], 127);
+            assert_eq!(fors_max[t], (1u32 << FORS_A) - 1);
             t += 1;
         }
-        assert_eq!(tree_max, (1u64 << 60) - 1);
-        assert_eq!(leaf_max, 31);
+        assert_eq!(tree_max, (1u128 << H) - 1);
+        assert_eq!(leaf_max, (1u32 << HP) - 1);
     }
 }

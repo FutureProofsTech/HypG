@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "hypg-aead"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-core",
  "hypg-symm",
@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "hypg-bench"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-core",
  "hypg-ds",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "hypg-cli"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-ds",
  "hypg-kem",
@@ -32,25 +32,25 @@ dependencies = [
 
 [[package]]
 name = "hypg-core"
-version = "1.0.0"
+version = "2.0.0"
 
 [[package]]
 name = "hypg-ds"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-core",
 ]
 
 [[package]]
 name = "hypg-hash"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-core",
 ]
 
 [[package]]
 name = "hypg-kat"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-core",
  "hypg-ds",
@@ -61,28 +61,28 @@ dependencies = [
 
 [[package]]
 name = "hypg-kem"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-core",
 ]
 
 [[package]]
 name = "hypg-lattice"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-kem",
 ]
 
 [[package]]
 name = "hypg-mt"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-ds",
 ]
 
 [[package]]
 name = "hypg-redteam"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-aead",
  "hypg-core",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "hypg-symm"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hypg-core",
 ]

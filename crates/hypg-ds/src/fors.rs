@@ -1,11 +1,11 @@
-//! FORS few-time signatures (`k = 30` trees, height `a = 7`).
+//! FORS few-time signatures (`k = 35` trees, height `a = 9`).
 //!
 //! Secret leaf `(tree, leaf)`: `PRF(pubseed, esk, FORS addr)`.
-//! Signature per tree: secret leaf + 7-node auth path. Public key:
-//! Keyed-BLAKE3 over the 30 tree roots (all public geometry).
+//! Signature per tree: secret leaf + 9-node auth path. Public key:
+//! Keyed-BLAKE3 over the 35 tree roots (all public geometry).
 
 use crate::addr::{Addr, T_FORS, T_TREE};
-use crate::params::{FORS_A, FORS_K, FORS_T, N};
+use crate::params::{FORS_A, FORS_K, FORS_T, FORS_T_MASK, N};
 use crate::thash::{h, prf};
 
 /// FORS signature: per tree `(secret leaf, auth path)`.
@@ -20,7 +20,7 @@ fn leaf_secret(pubseed: &[u8; N], esk: &[u8; N], tree: u32, leaf: u32) -> [u8; N
     prf(pubseed, esk, &a)
 }
 
-/// FORS tree root for tree `t` (full 128-leaf build).
+/// FORS tree root for tree `t` (full 512-leaf build).
 #[allow(clippy::many_single_char_names)]
 fn tree_root(pubseed: &[u8; N], esk: &[u8; N], t: u32) -> [u8; N] {
     let mut level = [[0u8; N]; FORS_T];
@@ -50,7 +50,7 @@ fn tree_root(pubseed: &[u8; N], esk: &[u8; N], t: u32) -> [u8; N] {
     level[0]
 }
 
-/// FORS public key from secret: keyed hash over the 30 tree roots.
+/// FORS public key from secret: keyed hash over the `FORS_K` tree roots.
 #[must_use]
 pub fn fors_pk(pubseed: &[u8; N], esk: &[u8; N]) -> [u8; N] {
     let mut roots = [[0u8; N]; FORS_K];
@@ -62,13 +62,13 @@ pub fn fors_pk(pubseed: &[u8; N], esk: &[u8; N]) -> [u8; N] {
     compress_roots(pubseed, &roots)
 }
 
-/// Compress 30 roots with the FORS-roots tweak: keyed hash over
-/// `addr || roots` (992 B, single chunk — one root compression).
+/// Compress `FORS_K` roots with the FORS-roots tweak: keyed hash over
+/// `addr || roots` (`N + FORS_K * N` B, single chunk — one compression).
 fn compress_roots(pubseed: &[u8; N], roots: &[[u8; N]; FORS_K]) -> [u8; N] {
     let mut a = Addr::zero();
     a.set_type(T_FORS);
     a.set_f20(0xFFFF_FFFF);
-    let mut buf = [0u8; 32 + 30 * 32];
+    let mut buf = [0u8; N + FORS_K * N];
     let mut o = 0usize;
     let mut i = 0usize;
     while i < N {
@@ -91,8 +91,8 @@ fn compress_roots(pubseed: &[u8; N], roots: &[[u8; N]; FORS_K]) -> [u8; N] {
     out
 }
 
-/// FORS signature: per tree `(secret leaf, auth path[7])`.
-/// `indices[t]` is the 7-bit leaf selector (public after digest split,
+/// FORS signature: per tree `(secret leaf, auth path[9])`.
+/// `indices[t]` is the 9-bit leaf selector (public after digest split,
 /// but derived from the secret-bound message — treated uniformly).
 #[allow(clippy::many_single_char_names)]
 #[must_use]
@@ -126,7 +126,7 @@ pub fn fors_sign_one(
         level[l as usize] = leaf_secret(pubseed, esk, t, l);
         l += 1;
     }
-    let leaf = (idx & 127) as usize;
+    let leaf = (idx & FORS_T_MASK) as usize;
     let mut unit = ([0u8; N], [[0u8; N]; FORS_A]);
     unit.0 = level[leaf];
     // Auth path with sibling subtree recompute (public indices).
@@ -163,7 +163,7 @@ pub fn fors_verify(pubseed: &[u8; N], indices: &[u32; FORS_K], sig: &ForsSig) ->
     let mut roots = [[0u8; N]; FORS_K];
     let mut t = 0u32;
     while (t as usize) < FORS_K {
-        let leaf32 = indices[t as usize] & 127;
+        let leaf32 = indices[t as usize] & FORS_T_MASK;
         let mut node = sig[t as usize].0;
         let mut at = leaf32;
         let mut height = 0u32;
@@ -198,7 +198,7 @@ mod tests {
         let mut idx = [0u32; FORS_K];
         let mut t = 0u32;
         while (t as usize) < FORS_K {
-            idx[t as usize] = (t * 37 + 11) & 127;
+            idx[t as usize] = (t * 37 + 11) & FORS_T_MASK;
             t += 1;
         }
         let sig = fors_sign(&ps, &esk, &idx);
@@ -216,7 +216,7 @@ mod tests {
         let mut idx = [0u32; FORS_K];
         let mut t = 0u32;
         while (t as usize) < FORS_K {
-            idx[t as usize] = (t * 37 + 11) & 127;
+            idx[t as usize] = (t * 37 + 11) & FORS_T_MASK;
             t += 1;
         }
         let batch = fors_sign(&ps, &esk, &idx);
@@ -229,16 +229,16 @@ mod tests {
 
     #[test]
     fn leaf_boundaries_round_trip() {
-        // Edge leaves `0` (all-left) and `127` (all-right): auth-path
+        // Edge leaves `0` (all-left) and `511` (all-right): auth-path
         // sibling selection at the extremes, plus `sign_one`/batch
         // agreement there (the parallel driver signs edge trees too).
         let ps = [0x61u8; N];
         let esk = [0x62u8; N];
-        for edge in [0u32, 127] {
+        for edge in [0u32, FORS_T_MASK] {
             let mut idx = [0u32; FORS_K];
             let mut t = 0u32;
             while (t as usize) < FORS_K {
-                idx[t as usize] = (t * 37 + 11) & 127;
+                idx[t as usize] = (t * 37 + 11) & FORS_T_MASK;
                 t += 1;
             }
             idx[0] = edge;
@@ -247,7 +247,7 @@ mod tests {
             assert_eq!(fors_sign_one(&ps, &esk, 0, edge), sig[0]);
             // Off-by-one index must not verify.
             let mut bad = idx;
-            bad[0] = if edge == 0 { 1 } else { 126 };
+            bad[0] = if edge == 0 { 1 } else { FORS_T_MASK - 1 };
             assert_ne!(fors_verify(&ps, &bad, &sig), fors_pk(&ps, &esk));
         }
     }

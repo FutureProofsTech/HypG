@@ -1,24 +1,30 @@
-//! DS parameters (`HypG-DS-128s` primary; `128f` reserved for later).
+//! DS parameters (`HypG-DS-256f` hardened profile).
+//!
+//! NIST Category-5 *dimensions*: 256-bit hash, 68-bit hypertree, 17
+//! layers of height 4, FORS with 35 trees of height 9. This is a
+//! parameter-hardening profile, not a security certification.
 //!
 //! All sizes fixed at compile time. `SIG_LEN` is large by nature
 //! (hash-based signatures trade size for conservative assumptions).
 
 /// Hash output / security parameter `n = 32` (BLAKE3-256, no truncation).
 pub const N: usize = 32;
-/// Hypertree total height `h = 60`.
-pub const H: usize = 60;
-/// Hypertree layers `d = 12`.
-pub const D: usize = 12;
-/// Per-layer XMSS height `h' = 5` (32 leaves per tree).
-pub const HP: usize = 5;
+/// Hypertree total height `h = 68`.
+pub const H: usize = 68;
+/// Hypertree layers `d = 17`.
+pub const D: usize = 17;
+/// Per-layer XMSS height `h' = 4` (16 leaves per tree).
+pub const HP: usize = 4;
 /// Leaves per XMSS tree.
-pub const LEAVES: usize = 32;
-/// FORS trees `k = 30`.
-pub const FORS_K: usize = 30;
-/// FORS tree height `a = 7` (`t = 128` leaves).
-pub const FORS_A: usize = 7;
+pub const LEAVES: usize = 16;
+/// FORS trees `k = 35`.
+pub const FORS_K: usize = 35;
+/// FORS tree height `a = 9` (`t = 512` leaves).
+pub const FORS_A: usize = 9;
 /// FORS leaves per tree.
-pub const FORS_T: usize = 128;
+pub const FORS_T: usize = 512;
+/// Leaf-index mask (`FORS_T - 1`) in `u32` form, avoiding runtime casts.
+pub const FORS_T_MASK: u32 = 511;
 /// WOTS+ Winternitz parameter `w = 16`.
 pub const W: usize = 16;
 /// WOTS+ chain length counts: message digits, checksum digits, total.
@@ -44,7 +50,7 @@ pub const SIG_LEN: usize = N + FORS_SIG_LEN + D * XMSS_SIG_LEN;
 const _: () = {
     assert!(WOTS_LEN1 + WOTS_LEN2 == WOTS_LEN);
     assert!(D * HP == H);
-    assert!(SIG_LEN == 35456);
+    assert!(SIG_LEN == 49992);
     assert!(SIG_PK_LEN == 64);
     assert!(SIG_SK_LEN == 128);
 };
