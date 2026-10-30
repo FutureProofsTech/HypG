@@ -186,6 +186,7 @@ Start at [`docs/README.md`](docs/README.md). The main entry points:
 | [`docs/deployment.md`](docs/deployment.md) | Why deployment is prohibited |
 | [`papers/whitepaper.pdf`](papers/whitepaper.pdf) | White Paper: design, architecture, and evaluation |
 | [`papers/yellowpaper.pdf`](papers/yellowpaper.pdf) | Yellow Paper: normative algorithms and wire formats |
+| [`papers/iacr.pdf`](papers/iacr.pdf) | Extended anonymous technical report (IACR-style PDF) |
 
 ## Non-goals
 

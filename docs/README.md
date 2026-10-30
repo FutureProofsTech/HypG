@@ -75,6 +75,9 @@ parameter change. See [domains.md](domains.md).
 2. [`../papers/yellowpaper.pdf`](../papers/yellowpaper.pdf) — Yellow
    Paper: normative algorithms, formal definitions, wire layouts,
    domain registry, API contracts, and KAT inventory.
+3. [`../papers/iacr.pdf`](../papers/iacr.pdf) — extended anonymous
+   technical report covering design, formal specification, threat model,
+   evaluation, and reproducibility.
 
 The LaTeX sources are [`../papers/whitepaper.tex`](../papers/whitepaper.tex)
 and [`../papers/yellowpaper.tex`](../papers/yellowpaper.tex).  The PDFs
