@@ -46,6 +46,7 @@
   {\end{enumerate}\par\medskip}
 
 \begin{document}
+\setcounter{tocdepth}{1}
 
 \title{\textbf{HypG v2.0.1: A Complete Safe-Rust\\
 Post-Quantum Cryptographic Suite}\\[0.5ex]
@@ -55,7 +56,10 @@ Design, Formal Specification, and Evaluation}
 \author{HypG Project}
 \authorrunning{HypG Project}
 \institute{Independent research prototype}
+\let\hypgorigaddcontentsline\addcontentsline
+\renewcommand{\addcontentsline}[3]{}
 \maketitle
+\let\addcontentsline\hypgorigaddcontentsline
 
 \begin{abstract}
 We present HypG v2.0.1, a from-scratch, zero-external-dependency
