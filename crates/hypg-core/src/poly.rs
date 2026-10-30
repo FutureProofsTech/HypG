@@ -15,14 +15,37 @@
     clippy::cast_lossless
 )]
 
+use crate::ct::zeroize_u16;
 use crate::params::{
     C1_PACKED_LEN, C1_Q_MASK, C2_PACKED_LEN, C2_Q_MASK, CBD_ETA, CBD_RAND_LEN, ENCODE_SHIFT,
     MOD_Q_MASK, MSG_LEN, POLY_N, POLY_PACKED_LEN,
 };
 
 /// Polynomial with coefficients in `0..4096` (always reduced).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Coefficients may be secret (`s`, `e`, `r`), so `Debug` is redacted and
+/// equality scans the full coefficient vector (no early exit).
+#[derive(Clone, Copy)]
 pub struct Poly(pub [u16; POLY_N]);
+
+impl core::fmt::Debug for Poly {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Poly { .. }")
+    }
+}
+
+impl PartialEq for Poly {
+    fn eq(&self, other: &Self) -> bool {
+        let mut diff = 0u16;
+        let mut i = 0usize;
+        while i < POLY_N {
+            diff |= self.0[i] ^ other.0[i];
+            i += 1;
+        }
+        diff == 0
+    }
+}
+impl Eq for Poly {}
 
 impl Poly {
     /// Zero polynomial.
@@ -179,15 +202,18 @@ impl Poly {
     }
 }
 
-/// Inner product `a·b = sum_i a[i]*b[i]` over `R_q` for equal-length
-/// slices. The loop bound is public (module rank), never secret.
+/// Inner product `a·b = sum_i a[i]*b[i]` over `R_q`. The loop bound is
+/// public (module rank) and the function is total: on unequal lengths it
+/// consumes the common prefix instead of panicking.
 #[must_use]
 pub fn dot(a: &[Poly], b: &[Poly]) -> Poly {
-    debug_assert_eq!(a.len(), b.len());
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
     let mut acc = Poly::zero();
     let mut i = 0usize;
-    while i < a.len() {
-        acc = acc.add(&a[i].mul(&b[i]));
+    while i < n {
+        let mut prod = a[i].mul(&b[i]);
+        acc = acc.add(&prod);
+        zeroize_u16(&mut prod.0);
         i += 1;
     }
     acc
@@ -197,12 +223,23 @@ pub fn dot(a: &[Poly], b: &[Poly]) -> Poly {
 /// v1.x test harnesses. New code should use [`dot`].
 #[must_use]
 pub fn dot2(a0: &Poly, a1: &Poly, b0: &Poly, b1: &Poly) -> Poly {
-    a0.mul(b0).add(&a1.mul(b1))
+    let mut p0 = a0.mul(b0);
+    let mut p1 = a1.mul(b1);
+    let out = p0.add(&p1);
+    zeroize_u16(&mut p0.0);
+    zeroize_u16(&mut p1.0);
+    out
 }
 
 /// Polynomial with 10-bit coefficients (compressed `c1`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Poly10(pub [u16; POLY_N]);
+
+impl core::fmt::Debug for Poly10 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Poly10 { .. }")
+    }
+}
 
 impl Poly10 {
     /// Decompress `10 -> 12` bits: `c << 2`.
@@ -231,8 +268,14 @@ impl Poly10 {
 }
 
 /// Polynomial with 5-bit coefficients (compressed `c2`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Poly5(pub [u16; POLY_N]);
+
+impl core::fmt::Debug for Poly5 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Poly5 { .. }")
+    }
+}
 
 impl Poly5 {
     /// Decompress `5 -> 12` bits: `c << 7`.
@@ -340,6 +383,22 @@ pub fn uniform_from_packed(rand384: &[u8; POLY_PACKED_LEN]) -> Poly {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dot_is_total_on_unequal_lengths() {
+        let a = [Poly::zero(); 3];
+        let b = [Poly::zero(); 2];
+        assert_eq!(dot(&a, &b), Poly::zero());
+        assert_eq!(dot(&b, &a), Poly::zero());
+        assert_eq!(dot(&[], &a), Poly::zero());
+    }
+
+    #[test]
+    fn poly_debug_is_redacted() {
+        let p = Poly([7u16; POLY_N]);
+        assert_eq!(std::format!("{p:?}"), "Poly { .. }");
+        assert!(!std::format!("{p:?}").contains('7'));
+    }
 
     #[test]
     fn pack12_round_trip() {

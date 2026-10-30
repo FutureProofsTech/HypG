@@ -7,6 +7,7 @@
 use crate::addr::{Addr, T_FORS, T_TREE};
 use crate::params::{FORS_A, FORS_K, FORS_T, FORS_T_MASK, N};
 use crate::thash::{h, prf};
+use hypg_core::ct::zeroize_nested;
 
 /// FORS signature: per tree `(secret leaf, auth path)`.
 pub type ForsSig = [([u8; N], [[u8; N]; FORS_A]); FORS_K];
@@ -47,7 +48,9 @@ fn tree_root(pubseed: &[u8; N], esk: &[u8; N], t: u32) -> [u8; N] {
         width /= 2;
         height += 1;
     }
-    level[0]
+    let root = level[0];
+    zeroize_nested(&mut level);
+    root
 }
 
 /// FORS public key from secret: keyed hash over the `FORS_K` tree roots.
@@ -63,7 +66,8 @@ pub fn fors_pk(pubseed: &[u8; N], esk: &[u8; N]) -> [u8; N] {
 }
 
 /// Compress `FORS_K` roots with the FORS-roots tweak: keyed hash over
-/// `addr || roots` (`N + FORS_K * N` B, single chunk — one compression).
+/// `addr || roots` (`N + FORS_K * N = 1152` B, one full BLAKE3 chunk
+/// plus a 128-byte tail).
 fn compress_roots(pubseed: &[u8; N], roots: &[[u8; N]; FORS_K]) -> [u8; N] {
     let mut a = Addr::zero();
     a.set_type(T_FORS);
@@ -97,8 +101,18 @@ fn compress_roots(pubseed: &[u8; N], roots: &[[u8; N]; FORS_K]) -> [u8; N] {
 #[allow(clippy::many_single_char_names)]
 #[must_use]
 pub fn fors_sign(pubseed: &[u8; N], esk: &[u8; N], indices: &[u32; FORS_K]) -> ForsSig {
-    let mut sig: ForsSig = [([0u8; N], [[0u8; N]; FORS_A]); FORS_K];
+    // Fail closed before building any tree: one bad selector must not
+    // yield a partially valid signature (and must not pay for the other
+    // `FORS_K - 1` full trees).
     let mut t = 0u32;
+    while (t as usize) < FORS_K {
+        if indices[t as usize] > FORS_T_MASK {
+            return [([0u8; N], [[0u8; N]; FORS_A]); FORS_K];
+        }
+        t += 1;
+    }
+    let mut sig: ForsSig = [([0u8; N], [[0u8; N]; FORS_A]); FORS_K];
+    t = 0;
     while (t as usize) < FORS_K {
         sig[t as usize] = fors_sign_one(pubseed, esk, t, indices[t as usize]);
         t += 1;
@@ -119,18 +133,24 @@ pub fn fors_sign_one(
     t: u32,
     idx: u32,
 ) -> ([u8; N], [[u8; N]; FORS_A]) {
-    // Full tree (128 leaves) — simple and stack-resident.
+    // Fail closed: an out-of-range leaf selector must never wrap onto a
+    // real leaf (which would silently sign a different index).
+    if idx > FORS_T_MASK {
+        return ([0u8; N], [[0u8; N]; FORS_A]);
+    }
+    // Full tree (`FORS_T = 512` leaves) — simple and stack-resident.
     let mut level = [[0u8; N]; FORS_T];
     let mut l = 0u32;
     while (l as usize) < FORS_T {
         level[l as usize] = leaf_secret(pubseed, esk, t, l);
         l += 1;
     }
-    let leaf = (idx & FORS_T_MASK) as usize;
+    let leaf = usize::try_from(idx).unwrap_or(0);
     let mut unit = ([0u8; N], [[0u8; N]; FORS_A]);
     unit.0 = level[leaf];
     // Auth path with sibling subtree recompute (public indices).
     let mut work = level;
+    zeroize_nested(&mut level);
     let mut node = leaf;
     let mut width = FORS_T;
     let mut height = 0u32;
@@ -153,6 +173,7 @@ pub fn fors_sign_one(
         width /= 2;
         height += 1;
     }
+    zeroize_nested(&mut work);
     unit
 }
 
@@ -163,7 +184,11 @@ pub fn fors_verify(pubseed: &[u8; N], indices: &[u32; FORS_K], sig: &ForsSig) ->
     let mut roots = [[0u8; N]; FORS_K];
     let mut t = 0u32;
     while (t as usize) < FORS_K {
-        let leaf32 = indices[t as usize] & FORS_T_MASK;
+        // Public selector, but still fail closed instead of wrapping.
+        if indices[t as usize] > FORS_T_MASK {
+            return [0u8; N];
+        }
+        let leaf32 = indices[t as usize];
         let mut node = sig[t as usize].0;
         let mut at = leaf32;
         let mut height = 0u32;
@@ -225,6 +250,23 @@ mod tests {
             assert_eq!(fors_sign_one(&ps, &esk, t, idx[t as usize]), batch[t as usize]);
             t += 1;
         }
+    }
+
+    #[test]
+    fn out_of_range_index_fails_closed() {
+        let ps = [0x61u8; N];
+        let esk = [0x62u8; N];
+        let bad = FORS_T_MASK + 1;
+        assert_eq!(fors_sign_one(&ps, &esk, 0, bad), ([0u8; N], [[0u8; N]; FORS_A]));
+        let mut idx = [0u32; FORS_K];
+        let mut t = 0u32;
+        while (t as usize) < FORS_K {
+            idx[t as usize] = (t * 37 + 11) & FORS_T_MASK;
+            t += 1;
+        }
+        idx[0] = bad;
+        let sig = fors_sign(&ps, &esk, &idx);
+        assert_eq!(fors_verify(&ps, &idx, &sig), [0u8; N]);
     }
 
     #[test]

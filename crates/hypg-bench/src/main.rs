@@ -8,6 +8,8 @@
 //! never on timing. Floats are confined to this std harness; libraries
 //! stay float-free.
 
+#![forbid(unsafe_code)]
+
 use std::time::Instant;
 
 use hypg_core::params::{C1_PACKED_LEN, C1_VEC_PACKED_LEN, CT_LEN};

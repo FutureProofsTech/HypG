@@ -80,6 +80,43 @@ fn keygen_bad_hex_char_exit_2() {
 }
 
 #[test]
+fn keygen_missing_seed_value_exit_2() {
+    // Must not silently fall back to OS randomness when `--seed` is
+    // present without a value.
+    let out = run(&["keygen", "--seed"]);
+    assert_eq!(code_of(&out), 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("requires a value"));
+}
+
+#[test]
+fn keygen_unknown_extra_arg_exit_2() {
+    let out = run(&["keygen", "--seed", &hex_of(0x42, 32), "extra"]);
+    assert_eq!(code_of(&out), 2);
+    let out = run(&["keygen", "--frobnicate", &hex_of(0x42, 32)]);
+    assert_eq!(code_of(&out), 2);
+}
+
+#[test]
+fn encaps_missing_coins_value_exit_2() {
+    let out = run(&["encaps", &hex_of(0x00, 1568), "--coins"]);
+    assert_eq!(code_of(&out), 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("requires a value"));
+}
+
+#[test]
+fn encaps_extra_arg_exit_2() {
+    let out = run(&["encaps", &hex_of(0x00, 1568), "extra"]);
+    assert_eq!(code_of(&out), 2);
+}
+
+#[test]
+fn ds_keygen_missing_esk_value_exit_2() {
+    let out = run(&["ds-keygen", "--esk"]);
+    assert_eq!(code_of(&out), 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("requires a value"));
+}
+
+#[test]
 fn encaps_bad_pk_length_exit_2() {
     let out = run(&["encaps", "4242"]);
     assert_eq!(code_of(&out), 2);

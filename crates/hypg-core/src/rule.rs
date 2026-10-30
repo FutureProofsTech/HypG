@@ -5,11 +5,27 @@
 //! into an 8-word (512-bit) rule via the internal XOF.
 
 use crate::b3::b3_expand;
+use crate::ct::{zeroize, zeroize_u64};
 use crate::params::{RULE_WORDS, SEED_LEN};
 
 /// Non-abelian local transition micro-code.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Expanded from a secret seed, so `Debug` is redacted and `Drop`
+/// best-effort zeroizes the words.
+#[derive(Clone)]
 pub struct Rule(pub [u64; RULE_WORDS]);
+
+impl core::fmt::Debug for Rule {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Rule { .. }")
+    }
+}
+
+impl Drop for Rule {
+    fn drop(&mut self) {
+        zeroize_u64(&mut self.0);
+    }
+}
 
 impl Rule {
     /// Expand `seed` under `domain` into rule words (little-endian).
@@ -33,6 +49,7 @@ impl Rule {
             ]);
             i += 1;
         }
+        zeroize(&mut bytes);
         Self(words)
     }
 }

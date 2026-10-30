@@ -12,6 +12,8 @@
 //!
 //! Harness-only numeric casts between int and float types for lattice
 //! arithmetic and statistics; libraries stay cast-clean per policy.
+
+#![forbid(unsafe_code)]
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,

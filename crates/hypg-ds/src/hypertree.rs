@@ -21,6 +21,12 @@ pub fn ht_sign(
     msg0: &[u8; N],
 ) -> [LayerSig; D] {
     let mut out: [LayerSig; D] = [([[0u8; N]; WOTS_LEN], [[0u8; N]; HP]); D];
+    // Fail closed: the bottom leaf index is 4 bits by construction; an
+    // out-of-range value must not be turned into a signature over the
+    // zero message by the upper layers.
+    if leaf as usize >= LEAVES {
+        return out;
+    }
     let mut msg = *msg0;
     let mut child_tree = tree_idx >> HP;
     let mut i = 0u32;
@@ -49,6 +55,10 @@ pub fn ht_verify(
     msg0: &[u8; N],
     sig: &[LayerSig; D],
 ) -> [u8; N] {
+    // Fail closed: an out-of-range leaf cannot name a real bottom leaf.
+    if leaf as usize >= LEAVES {
+        return [0u8; N];
+    }
     let mut msg = *msg0;
     let mut child_tree = tree_idx >> HP;
     let mut i = 0u32;
@@ -76,6 +86,22 @@ pub fn ht_root(pubseed: &[u8; N], esk: &[u8; N]) -> [u8; N] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn out_of_range_leaf_fails_closed() {
+        let ps = [0x71u8; N];
+        let esk = [0x72u8; N];
+        let msg0 = [0x73u8; N];
+        let bad = u32::try_from(LEAVES).unwrap_or(u32::MAX);
+        let sig = ht_sign(&ps, &esk, 0x12345, bad, &msg0);
+        let zero_layer = ([[0u8; N]; WOTS_LEN], [[0u8; N]; HP]);
+        let mut i = 0usize;
+        while i < D {
+            assert_eq!(sig[i], zero_layer);
+            i += 1;
+        }
+        assert_eq!(ht_verify(&ps, 0x12345, bad, &msg0, &sig), [0u8; N]);
+    }
 
     #[test]
     fn hypertree_round_trip() {

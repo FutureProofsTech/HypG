@@ -10,6 +10,8 @@
 //! threads are a platform capability (OS scheduler + 8 MB stacks),
 //! not a cryptographic primitive.
 
+#![forbid(unsafe_code)]
+
 use hypg_ds::fors::{fors_sign_one, fors_verify, ForsSig};
 use hypg_ds::params::{D, FORS_A, FORS_K, HP, LEAVES, WOTS_LEN};
 use hypg_ds::xmss::{xmss_build, xmss_sign_with_leaves, xmss_verify};
@@ -67,6 +69,69 @@ pub fn mt_sign(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN]) {
     mt_sign_with_workers(sk, msg, sig_out, workers.max(1));
 }
 
+/// Best-effort erasure for a local byte buffer (compiler-fenced).
+fn wipe(buf: &mut [u8]) {
+    let mut i = 0usize;
+    while i < buf.len() {
+        buf[i] = 0;
+        i += 1;
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    core::hint::black_box(buf.as_mut_ptr());
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Erase a local FORS signature copy (contains revealed secret leaves).
+fn wipe_fors(sig: &mut ForsSig) {
+    let mut t = 0usize;
+    while t < FORS_K {
+        wipe(&mut sig[t].0);
+        let mut h = 0usize;
+        while h < FORS_A {
+            wipe(&mut sig[t].1[h]);
+            h += 1;
+        }
+        t += 1;
+    }
+}
+
+/// Erase one gathered FORS unit (secret leaf + auth path).
+fn wipe_fors_unit(unit: &mut ForsUnit) {
+    wipe(&mut unit.0);
+    let mut h = 0usize;
+    while h < FORS_A {
+        wipe(&mut unit.1[h]);
+        h += 1;
+    }
+}
+
+/// Erase a gathered XMSS leaf buffer.
+fn wipe_leaves(leaves: &mut XmssLeaves) {
+    let mut i = 0usize;
+    while i < LEAVES {
+        wipe(&mut leaves[i]);
+        i += 1;
+    }
+}
+
+/// Erase a local hypertree signature copy (WOTS chain material).
+fn wipe_layers(sig: &mut [LayerSig; D]) {
+    let mut l = 0usize;
+    while l < D {
+        let mut c = 0usize;
+        while c < WOTS_LEN {
+            wipe(&mut sig[l].0[c]);
+            c += 1;
+        }
+        let mut h = 0usize;
+        while h < HP {
+            wipe(&mut sig[l].1[h]);
+            h += 1;
+        }
+        l += 1;
+    }
+}
+
 /// One worker's strided chunk, computed serially: worker `w` takes units
 /// `w, w+workers, ...`. Used by spawned threads and as the join-failure
 /// fallback (identical assignment, so the fallback output is identical).
@@ -84,12 +149,12 @@ fn compute_chunk(
         match units[i] {
             Unit::Xmss(layer) => {
                 let tree = ctx.tree_idx >> (HP as u128 * (u128::from(layer) + 1));
-                xm.push((layer, xmss_build(&ctx.pubseed, &ctx.esk, layer, tree)));
+                xm.push((layer, xmss_build(&ctx.pubseed, ctx.esk(), layer, tree)));
             }
             Unit::Fors(tree) => {
                 fo.push((
                     tree,
-                    fors_sign_one(&ctx.pubseed, &ctx.esk, tree, ctx.fors_idx[tree as usize]),
+                    fors_sign_one(&ctx.pubseed, ctx.esk(), tree, ctx.fors_idx[tree as usize]),
                 ));
             }
         }
@@ -141,15 +206,17 @@ pub fn mt_sign_with_workers(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN],
             // Join failure means a worker thread was lost (platform
             // failure); recompute its chunk serially — same assignment,
             // same bytes, no panic.
-            let (xm, fo) = match h.join() {
+            let (mut xm, mut fo) = match h.join() {
                 Ok(r) => r,
                 Err(_) => compute_chunk(&ctx, &units, workers, w),
             };
-            for (layer, leaves) in xm {
-                xmss_leaves[layer as usize] = Some(leaves);
+            for (layer, leaves) in &mut xm {
+                xmss_leaves[*layer as usize] = Some(*leaves);
+                wipe_leaves(leaves);
             }
-            for (tree, unit) in fo {
-                fors_units[tree as usize] = Some(unit);
+            for (tree, unit) in &mut fo {
+                fors_units[*tree as usize] = Some(*unit);
+                wipe_fors_unit(unit);
             }
         }
     });
@@ -161,7 +228,7 @@ pub fn mt_sign_with_workers(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN],
     while (t as usize) < FORS_K {
         fsig[t as usize] = match fors_units[t as usize] {
             Some(u) => u,
-            None => fors_sign_one(&ctx.pubseed, &ctx.esk, t, ctx.fors_idx[t as usize]),
+            None => fors_sign_one(&ctx.pubseed, ctx.esk(), t, ctx.fors_idx[t as usize]),
         };
         t += 1;
     }
@@ -180,18 +247,42 @@ pub fn mt_sign_with_workers(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN],
         };
         // Same totality rule as the FORS assembly above: recompute a
         // lost unit serially instead of panicking.
-        let leaves_owned: XmssLeaves = match xmss_leaves[l as usize] {
+        let mut leaves_owned: XmssLeaves = match xmss_leaves[l as usize] {
             Some(x) => x,
-            None => xmss_build(&ctx.pubseed, &ctx.esk, l, tree),
+            None => xmss_build(&ctx.pubseed, ctx.esk(), l, tree),
         };
         let leaves = &leaves_owned;
-        let (wsig, auth) = xmss_sign_with_leaves(&ctx.pubseed, &ctx.esk, l, tree, at, &msg, leaves);
+        let (wsig, auth) =
+            xmss_sign_with_leaves(&ctx.pubseed, ctx.esk(), l, tree, at, &msg, leaves);
         ht_sig[l as usize] = (wsig, auth);
         msg = xmss_verify(&ctx.pubseed, l, tree, at, &msg, &wsig, &auth);
         child_tree = tree;
+        let mut li = 0usize;
+        while li < LEAVES {
+            wipe(&mut leaves_owned[li]);
+            li += 1;
+        }
         l += 1;
     }
     serialize_sig(&ctx.r, &fsig, &ht_sig, sig_out);
+    wipe_fors(&mut fsig);
+    wipe_layers(&mut ht_sig);
+    // The gather buffers hold copies of the same secret FORS leaves and
+    // XMSS leaves; erase them before the vectors drop.
+    let mut t = 0usize;
+    while t < fors_units.len() {
+        if let Some(unit) = &mut fors_units[t] {
+            wipe_fors_unit(unit);
+        }
+        t += 1;
+    }
+    let mut l = 0usize;
+    while l < xmss_leaves.len() {
+        if let Some(leaves) = &mut xmss_leaves[l] {
+            wipe_leaves(leaves);
+        }
+        l += 1;
+    }
 }
 
 #[cfg(test)]

@@ -25,11 +25,17 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> u8 {
 }
 
 /// Constant-time select: `out = pick(secret_bit, a, b)`.
-/// `bit` must be 0 or 1; `a`/`b` equal length (public).
+/// `bit` is normalized to its low bit; `a`/`b` must have `out.len()`
+/// bytes (public). On a length mismatch the output is zeroized instead
+/// of being partially written.
 pub fn ct_select(out: &mut [u8], a: &[u8], b: &[u8], bit: u8) {
-    let mask = bit.wrapping_neg();
+    if out.len() != a.len() || a.len() != b.len() {
+        zeroize(out);
+        return;
+    }
+    let mask = (bit & 1).wrapping_neg();
     let mut i = 0usize;
-    while i < out.len() && i < a.len() && i < b.len() {
+    while i < out.len() {
         out[i] = (a[i] & mask) | (b[i] & !mask);
         i += 1;
     }
@@ -48,6 +54,52 @@ pub fn zeroize(buf: &mut [u8]) {
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     core::hint::black_box(buf.as_mut_ptr());
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Best-effort erasure for `u16` word buffers (polynomial coefficients).
+pub fn zeroize_u16(buf: &mut [u16]) {
+    let mut i = 0usize;
+    while i < buf.len() {
+        buf[i] = 0;
+        i += 1;
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    core::hint::black_box(buf.as_mut_ptr());
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Best-effort erasure for `u32` word buffers (BLAKE3 state words).
+pub fn zeroize_u32(buf: &mut [u32]) {
+    let mut i = 0usize;
+    while i < buf.len() {
+        buf[i] = 0;
+        i += 1;
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    core::hint::black_box(buf.as_mut_ptr());
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Best-effort erasure for `u64` word buffers (automaton state/rule).
+pub fn zeroize_u64(buf: &mut [u64]) {
+    let mut i = 0usize;
+    while i < buf.len() {
+        buf[i] = 0;
+        i += 1;
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    core::hint::black_box(buf.as_mut_ptr());
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Best-effort erasure for fixed-size arrays of byte arrays (e.g. WOTS
+/// secret chains, FORS/XMSS levels). Total for any geometry.
+pub fn zeroize_nested<const M: usize, const L: usize>(buf: &mut [[u8; M]; L]) {
+    let mut i = 0usize;
+    while i < L {
+        zeroize(&mut buf[i]);
+        i += 1;
+    }
 }
 
 #[cfg(test)]
@@ -82,6 +134,12 @@ mod tests {
         assert_eq!(out, a);
         ct_select(&mut out, &a, &b, 0);
         assert_eq!(out, b);
+        // Non-binary bit uses its low bit; mismatched lengths fail closed.
+        ct_select(&mut out, &a, &b, 3);
+        assert_eq!(out, a);
+        let mut short = [0xAAu8; 8];
+        ct_select(&mut short, &a, &b, 1);
+        assert_eq!(short, [0u8; 8]);
     }
 
     #[test]

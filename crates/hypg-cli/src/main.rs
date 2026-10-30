@@ -20,6 +20,8 @@
 //! `ds-verify`). Scripts must treat `3` as "peer/message untrusted",
 //! not as a CLI bug.
 
+#![forbid(unsafe_code)]
+
 use std::io::Read;
 
 use hypg_kem::{decaps, encaps, keygen, Ciphertext, PublicKey, SecretKey};
@@ -96,15 +98,28 @@ fn os_random32() -> Result<[u8; 32], String> {
     Ok(buf)
 }
 
-fn flag_value(args: &[String], flag: &str) -> Option<String> {
-    let mut i = 0usize;
-    while i < args.len() {
-        if args[i] == flag && i + 1 < args.len() {
-            return Some(args[i + 1].clone());
-        }
-        i += 1;
+/// Parse an optional trailing `flag value` pair at `pos`.
+///
+/// `Ok(None)` means the flag was absent. A present flag without a value,
+/// an unknown token, or extra arguments is a usage error (never a silent
+/// fallback to OS randomness).
+fn optional_flag(args: &[String], pos: usize, flag: &str) -> Result<Option<String>, CliError> {
+    if args.len() == pos {
+        return Ok(None);
     }
-    None
+    if args.len() == pos + 1 {
+        if args[pos] == flag {
+            return Err(CliError::from(format!("{flag} requires a value")));
+        }
+        return Err(CliError::from(format!("unexpected argument: {}", args[pos])));
+    }
+    if args.len() == pos + 2 {
+        if args[pos] == flag {
+            return Ok(Some(args[pos + 1].clone()));
+        }
+        return Err(CliError::from(format!("unexpected argument: {}", args[pos])));
+    }
+    Err(CliError::from(USAGE))
 }
 
 /// CLI failure with a process exit code: `2` = usage/input error,
@@ -131,10 +146,7 @@ fn auth_fail(msg: &str) -> CliError {
 }
 
 fn cmd_keygen(args: &[String]) -> Result<String, CliError> {
-    if args.len() > 3 {
-        return Err(CliError::from(USAGE));
-    }
-    let seed: [u8; 32] = match flag_value(args, "--seed") {
+    let seed: [u8; 32] = match optional_flag(args, 1, "--seed")? {
         Some(h) => from_hex(&h)?,
         None => os_random32()?,
     };
@@ -143,11 +155,11 @@ fn cmd_keygen(args: &[String]) -> Result<String, CliError> {
 }
 
 fn cmd_encaps(args: &[String]) -> Result<String, CliError> {
-    if args.len() < 2 || args.len() > 4 {
+    if args.len() < 2 {
         return Err(CliError::from(USAGE));
     }
     let pk = PublicKey(from_hex(&args[1])?);
-    let coins: [u8; 32] = match flag_value(args, "--coins") {
+    let coins: [u8; 32] = match optional_flag(args, 2, "--coins")? {
         Some(h) => from_hex(&h)?,
         None => os_random32()?,
     };
@@ -205,10 +217,7 @@ fn cmd_hash(args: &[String]) -> Result<String, CliError> {
 }
 
 fn cmd_ds_keygen(args: &[String]) -> Result<String, CliError> {
-    if args.len() > 3 {
-        return Err(CliError::from(USAGE));
-    }
-    let esk: [u8; 32] = match flag_value(args, "--esk") {
+    let esk: [u8; 32] = match optional_flag(args, 1, "--esk")? {
         Some(h) => from_hex(&h)?,
         None => os_random32()?,
     };

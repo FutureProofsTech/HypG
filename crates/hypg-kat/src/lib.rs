@@ -1,5 +1,7 @@
 //! `HypG` KAT harness (std allowed here; libraries stay `no_std`).
 
+#![forbid(unsafe_code)]
+
 use std::fmt::Write as _;
 
 use hypg_core::b3::b3_hash;
@@ -22,9 +24,10 @@ pub const FROZEN_HASH_KATS: &str = include_str!("../kats-hash/v2.0.0.txt");
 /// Compared byte-for-byte by `symm_kats_match_frozen_file`.
 pub const FROZEN_SYMM_KATS: &str = include_str!("../kats-symm/v2.0.0.txt");
 
-/// Frozen DS KAT vector file (v2.0 signature vectors).
+/// Frozen DS KAT vector file (v2.0.1 signature vectors after the
+/// PRF/F domain-tag and L-tree promotion revision).
 /// Compared byte-for-byte by `ds_kats_match_frozen_file`.
-pub const FROZEN_DS_KATS: &str = include_str!("../kats-ds/v2.0.0.txt");
+pub const FROZEN_DS_KATS: &str = include_str!("../kats-ds/v2.0.1.txt");
 
 fn hex(bytes: &[u8], out: &mut String) {
     const H: &[u8; 16] = b"0123456789abcdef";
@@ -172,7 +175,7 @@ pub fn print_symm_kats() {
 #[must_use]
 pub fn render_ds_kats() -> String {
     let mut s = String::new();
-    s.push_str("hypg_ds_version = 2.0.0-slh-256f-n32-b3\n");
+    s.push_str("hypg_ds_version = 2.0.1-slh-256f-n32-b3\n");
     let seeds: [[u8; 32]; 2] = [[0x42u8; 32], [0xFFu8; 32]];
     let msgs: [&[u8]; 2] = [b"", b"The quick brown fox jumps over the lazy dog. 0123456789"];
     for (idx, seed) in seeds.iter().enumerate() {
@@ -307,7 +310,7 @@ mod tests {
         assert_eq!(
             render_ds_kats(),
             FROZEN_DS_KATS,
-            "DS KAT output drifted from crates/hypg-kat/kats-ds/v2.0.0.txt; \
+            "DS KAT output drifted from crates/hypg-kat/kats-ds/v2.0.1.txt; \
              any intentional vector change requires a spec version bump \
              and a newly frozen file"
         );

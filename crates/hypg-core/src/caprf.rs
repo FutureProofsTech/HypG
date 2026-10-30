@@ -7,6 +7,7 @@
 //! non-abelian mixing as a heuristic hedge. All loops public and fixed.
 
 use crate::b3::{b3_expand, b3_kdf};
+use crate::ct::zeroize;
 use crate::params::{SEED_LEN, STATE_BYTES};
 use crate::rule::Rule;
 use crate::state::State;
@@ -39,7 +40,7 @@ pub fn ca_expand(out: &mut [u8], seed: &[u8; SEED_LEN], domain: &[u8]) {
     let rule = Rule::expand(seed, domain);
     let mut st = State::from_bytes_le(&init);
     run(&mut st, &rule);
-    let state_bytes = st.to_bytes_le();
+    let mut state_bytes = st.to_bytes_le();
 
     // Stage 3: `out = KDF(state || domain || "-out")`.
     let mut otag = [0u8; 64];
@@ -58,6 +59,10 @@ pub fn ca_expand(out: &mut [u8], seed: &[u8; SEED_LEN], domain: &[u8]) {
         k += 1;
     }
     b3_kdf(out, &[state_bytes.as_slice(), &otag[..olen]], domain);
+    zeroize(&mut init);
+    zeroize(&mut state_bytes);
+    zeroize(&mut init_tag);
+    zeroize(&mut otag);
 }
 
 /// Convenience: 32-byte CA-PRF output.

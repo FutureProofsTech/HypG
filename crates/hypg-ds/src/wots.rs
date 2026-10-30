@@ -5,7 +5,7 @@
 //! steps and selects via branchless `ct_select`. Verification uses the
 //! same routine (public inputs — identical code path, no separate logic).
 
-use hypg_core::ct::ct_select;
+use hypg_core::ct::{ct_select, zeroize};
 
 use crate::addr::{Addr, T_WOTS_HASH, T_WOTS_PK};
 use crate::params::{N, WOTS_LEN, WOTS_LEN1};
@@ -22,7 +22,7 @@ pub fn chain(pubseed: &[u8; N], x: &[u8; N], start: u32, steps: u32, addr: &Addr
     while s < 15 {
         let mut step_addr = *addr;
         step_addr.set_f28(start.wrapping_add(s));
-        let h = f(pubseed, &step_addr, &cur);
+        let mut h = f(pubseed, &step_addr, &cur);
         cur = h;
         // Branchless: take loop iteration `s` iff it lies inside the
         // requested segment (`s` counts from the segment start; the tweak
@@ -31,9 +31,14 @@ pub fn chain(pubseed: &[u8; N], x: &[u8; N], start: u32, steps: u32, addr: &Addr
         let mut sel = [0u8; N];
         ct_select(&mut sel, &h, &out, take);
         out = sel;
+        zeroize(&mut h);
+        zeroize(&mut sel);
         s += 1;
     }
-    out
+    let result = out;
+    zeroize(&mut cur);
+    zeroize(&mut out);
+    result
 }
 
 /// Base-16 digits of a 32-byte message plus 3-digit checksum → 67 digits.
@@ -134,9 +139,11 @@ pub fn pk_from_sk(pubseed: &[u8; N], sk: &[[u8; N]; WOTS_LEN], base: &Addr) -> [
 }
 
 /// L-tree compress 67 chain ends into one 32-byte node.
+///
+/// Odd width promotes the final node to the next level unchanged
+/// (FIPS 205 style); it is not hashed with itself.
 #[must_use]
 pub fn ltree(pubseed: &[u8; N], leaves: &[[u8; N]; WOTS_LEN], base: &Addr) -> [u8; N] {
-    // Pairwise hashing, duplicating the last node on odd levels (public geometry).
     let mut level = [[0u8; N]; WOTS_LEN];
     level.copy_from_slice(leaves);
     let mut width = WOTS_LEN;
@@ -146,13 +153,16 @@ pub fn ltree(pubseed: &[u8; N], leaves: &[[u8; N]; WOTS_LEN], base: &Addr) -> [u
         let mut p = 0u32;
         let mut i = 0usize;
         while i < width {
-            let left = level[i];
-            let right = if i + 1 < width { level[i + 1] } else { level[i] };
             let mut a = *base;
             a.set_type(T_WOTS_PK);
             a.set_f24(height);
             a.set_f28(p);
-            next[p as usize] = h(pubseed, &a, &left, &right);
+            if i + 1 < width {
+                next[p as usize] = h(pubseed, &a, &level[i], &level[i + 1]);
+            } else {
+                // Odd width: promote the last node unchanged.
+                next[p as usize] = level[i];
+            }
             p += 1;
             i += 2;
         }

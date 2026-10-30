@@ -170,10 +170,8 @@ impl fmt::Debug for StreamSealer {
 
 impl Drop for StreamSealer {
     fn drop(&mut self) {
-        // Best-effort: key material, nonce copy, and buffered keystream.
-        // `Hasher` internals are unreachable (private fields) — same
-        // posture as one-shot `seal`, whose transient MAC state is
-        // dropped, not wiped.
+        // Best-effort: key material, nonce copy, buffered keystream, and
+        // the keyed MAC state (`Hasher` zeroizes its own fields on drop).
         zeroize(&mut self.enc);
         zeroize(&mut self.nonce);
         zeroize(&mut self.ks.block);
@@ -228,8 +226,8 @@ impl StreamSealer {
         let mut hasher = Hasher::new_keyed(&mac);
         hasher.update(&nonce.0);
         hasher.update(ad);
-        // The `Hasher` holds its own key-word copy (unwipable, private
-        // fields — documented); wipe this local copy immediately.
+        // The `Hasher` holds its own key-word copy and wipes it on drop;
+        // wipe this local copy immediately anyway.
         zeroize(&mut mac);
         Self {
             enc,
@@ -263,7 +261,13 @@ impl StreamSealer {
             zeroize(ct);
             return None;
         }
-        self.ct_len = self.ct_len.wrapping_add(ct.len() as u64);
+        if let Some(v) = self.ct_len.checked_add(ct.len() as u64) {
+            self.ct_len = v;
+        } else {
+            self.failed = true;
+            zeroize(ct);
+            return None;
+        }
         self.hasher.update(ct);
         Some(())
     }
@@ -272,6 +276,7 @@ impl StreamSealer {
     /// `update` failed (poisoned stream).
     pub fn finish(mut self, tag: &mut [u8; TAG_LEN]) -> Option<()> {
         if self.failed {
+            zeroize(tag);
             return None;
         }
         self.hasher.update(&self.ad_len.to_le_bytes());
@@ -322,7 +327,13 @@ impl StreamOpener {
             zeroize(pt);
             return None;
         }
-        self.ct_len = self.ct_len.wrapping_add(ct.len() as u64);
+        if let Some(v) = self.ct_len.checked_add(ct.len() as u64) {
+            self.ct_len = v;
+        } else {
+            self.failed = true;
+            zeroize(pt);
+            return None;
+        }
         self.hasher.update(ct);
         Some(())
     }
@@ -501,8 +512,9 @@ mod tests {
         let mut sealer = StreamSealer::new(&key(), &nonce(), b"ad");
         let mut out = [0u8; 10];
         assert!(sealer.update(&pt[..20], &mut out).is_none());
-        let mut tag = [0u8; TAG_LEN];
+        let mut tag = [0xAAu8; TAG_LEN];
         assert!(sealer.finish(&mut tag).is_none(), "poisoned sealer must not finish");
+        assert_eq!(tag, [0u8; TAG_LEN], "poisoned finish must clear tag");
         let mut opener = StreamOpener::new(&key(), &nonce(), b"ad");
         let mut back = [0u8; 10];
         assert!(opener.update(&ct[..20], &mut back).is_none());

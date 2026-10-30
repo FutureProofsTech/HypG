@@ -2,11 +2,27 @@
 //!
 //! Little-endian byte order is normative across x86-64 and ARM64.
 
+use crate::ct::zeroize_u64;
 use crate::params::{STATE_BYTES, STATE_WORDS};
 
 /// Dense hyper-graph state. Lives in registers / stack only.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Carries expanded key material, so `Debug` is redacted and `Drop`
+/// best-effort zeroizes the words.
+#[derive(Clone)]
 pub struct State(pub [u64; STATE_WORDS]);
+
+impl core::fmt::Debug for State {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("State { .. }")
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        zeroize_u64(&mut self.0);
+    }
+}
 
 impl State {
     /// Zero state (useful for tests; never a valid key state).

@@ -10,6 +10,7 @@
 //! sequence `choice -> add -> rotate -> mul-xor` does not commute,
 //! and hyper-edges use strides 1/5/17 to break locality.
 
+use crate::ct::zeroize_u64;
 use crate::params::{ROUNDS, RULE_WORDS, STATE_WORDS};
 use crate::rule::Rule;
 use crate::state::State;
@@ -64,6 +65,7 @@ fn step_once(s: &mut State, rule: &Rule, round: u64) {
         s.0[j] = tmp[j];
         j += 1;
     }
+    zeroize_u64(&mut tmp);
 }
 
 /// Initialize state deterministically from seed material (public mapping).

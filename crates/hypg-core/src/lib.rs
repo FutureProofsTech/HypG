@@ -16,6 +16,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(test)]
+extern crate std;
+
 pub mod b3;
 pub mod caprf;
 pub mod chacha;

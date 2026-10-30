@@ -6,6 +6,8 @@
 //! Test vectors captured from the reference `chacha20 v0.9.1` crate
 //! (provenance in commit history).
 
+use crate::ct::{zeroize, zeroize_u32};
+
 #[allow(clippy::many_single_char_names)]
 fn quarter_round(s: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
     s[a] = s[a].wrapping_add(s[b]);
@@ -45,7 +47,7 @@ pub fn block(key: &[u8; 32], nonce: &[u8; 12], counter: u32, out: &mut [u8; 64])
         u32::from_le_bytes([nonce[4], nonce[5], nonce[6], nonce[7]]),
         u32::from_le_bytes([nonce[8], nonce[9], nonce[10], nonce[11]]),
     ];
-    let initial = s;
+    let mut initial = s;
     let mut r = 0usize;
     while r < 10 {
         quarter_round(&mut s, 0, 4, 8, 12);
@@ -68,6 +70,8 @@ pub fn block(key: &[u8; 32], nonce: &[u8; 12], counter: u32, out: &mut [u8; 64])
         }
         i += 1;
     }
+    zeroize_u32(&mut s);
+    zeroize_u32(&mut initial);
 }
 
 /// XOR `buf` with the keystream from `ctr0` upward (in place).
@@ -89,6 +93,7 @@ pub fn xor_in_place(key: &[u8; 32], nonce: &[u8; 12], ctr0: u32, buf: &mut [u8])
             buf[done + i] ^= blk[i];
             i += 1;
         }
+        zeroize(&mut blk);
         done += n;
         if last {
             break;

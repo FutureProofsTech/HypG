@@ -7,6 +7,7 @@ use crate::addr::{Addr, T_TREE};
 use crate::params::{HP, LEAVES, N, WOTS_LEN};
 use crate::thash::h;
 use crate::wots;
+use hypg_core::ct::zeroize_nested;
 
 /// XMSS public root from secret (builds the full 16-leaf tree).
 #[must_use]
@@ -26,9 +27,11 @@ fn leaf_pk(pubseed: &[u8; N], esk: &[u8; N], layer: u32, tree: u128, idx: u32) -
     base.set_layer(layer);
     base.set_tree(tree);
     base.set_f20(idx);
-    let sk = wots::gen_sk(pubseed, esk, &base);
+    let mut sk = wots::gen_sk(pubseed, esk, &base);
     let pk = wots::pk_from_sk(pubseed, &sk, &base);
-    wots::ltree(pubseed, &pk, &base)
+    let leaf = wots::ltree(pubseed, &pk, &base);
+    zeroize_nested(&mut sk);
+    leaf
 }
 
 /// WOTS+ keypair (secret + L-tree leaf) for keypair `idx`.
@@ -88,6 +91,11 @@ pub fn xmss_sign(
     idx: u32,
     msg: &[u8; N],
 ) -> ([[u8; N]; WOTS_LEN], [[u8; N]; HP]) {
+    // Fail closed: out-of-range leaf indices never sign (no zeroed leaf
+    // secret is used) and produce a signature that cannot verify.
+    if idx as usize >= LEAVES {
+        return ([[0u8; N]; WOTS_LEN], [[0u8; N]; HP]);
+    }
     // Full tree (`LEAVES` leaves) — simple and stack-resident. The signed
     // leaf's secret is kept for signing below (saves one regeneration).
     let mut level = [[0u8; N]; LEAVES];
@@ -109,6 +117,7 @@ pub fn xmss_sign(
     base.set_f20(idx);
     let digits = wots::digits(msg);
     let sig = wots::sign(pubseed, &leaf_sk, &digits, &base);
+    zeroize_nested(&mut leaf_sk);
     // Auth path: sibling at each height (public indices).
     let mut auth = [[0u8; N]; HP];
     let mut node = idx as usize;
@@ -168,13 +177,17 @@ pub fn xmss_sign_with_leaves(
     msg: &[u8; N],
     leaves: &[[u8; N]; LEAVES],
 ) -> ([[u8; N]; WOTS_LEN], [[u8; N]; HP]) {
+    if idx as usize >= LEAVES {
+        return ([[0u8; N]; WOTS_LEN], [[0u8; N]; HP]);
+    }
     let mut base = Addr::zero();
     base.set_layer(layer);
     base.set_tree(tree);
     base.set_f20(idx);
-    let sk = wots::gen_sk(pubseed, esk, &base);
+    let mut sk = wots::gen_sk(pubseed, esk, &base);
     let digits = wots::digits(msg);
     let sig = wots::sign(pubseed, &sk, &digits, &base);
+    zeroize_nested(&mut sk);
     let mut auth = [[0u8; N]; HP];
     let mut node = idx as usize;
     let mut width = LEAVES;
@@ -214,6 +227,10 @@ pub fn xmss_verify(
     sig: &[[u8; N]; WOTS_LEN],
     auth: &[[u8; N]; HP],
 ) -> [u8; N] {
+    // Fail closed: an out-of-range leaf index cannot name a real leaf.
+    if idx as usize >= LEAVES {
+        return [0u8; N];
+    }
     let mut base = Addr::zero();
     base.set_layer(layer);
     base.set_tree(tree);
@@ -272,6 +289,25 @@ mod tests {
             let wrong = if idx == 0 { 1 } else { u32::try_from(LEAVES - 2).unwrap_or(0) };
             assert_ne!(xmss_verify(&ps, 0, 7, wrong, &msg, &sig, &auth), root);
         }
+    }
+
+    #[test]
+    fn out_of_range_index_fails_closed() {
+        let ps = [0x51u8; N];
+        let esk = [0x52u8; N];
+        let msg = [0x53u8; N];
+        let bad = u32::try_from(LEAVES).unwrap_or(u32::MAX);
+        let (sig, auth) = xmss_sign(&ps, &esk, 0, 7, bad, &msg);
+        assert_eq!(sig, [[0u8; N]; WOTS_LEN]);
+        assert_eq!(auth, [[0u8; N]; HP]);
+        assert_eq!(xmss_verify(&ps, 0, 7, bad, &msg, &sig, &auth), [0u8; N]);
+        // The prebuilt-leaf path must reject before touching `leaves`;
+        // a dummy all-zero tree is sufficient (normal path is covered by
+        // `split_path_matches_monolith`).
+        let leaves = [[0u8; N]; LEAVES];
+        let (sig2, auth2) = xmss_sign_with_leaves(&ps, &esk, 0, 7, bad, &msg, &leaves);
+        assert_eq!(sig2, [[0u8; N]; WOTS_LEN]);
+        assert_eq!(auth2, [[0u8; N]; HP]);
     }
 
     #[test]

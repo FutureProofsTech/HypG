@@ -17,6 +17,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(test)]
+extern crate std;
+
 use hypg_core::b3::{b3_derive_key, Hasher};
 use hypg_core::chacha::xor_in_place;
 use hypg_core::ct::{ct_eq, zeroize};
@@ -36,8 +39,30 @@ const D_ENC: &str = "HYP-G/v07/symm-enc";
 const D_MAC: &str = "HYP-G/v07/symm-mac";
 
 /// AEAD key with best-effort erasure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Not `Copy`; `Debug` is redacted, equality is constant-time, and `Drop`
+/// best-effort zeroizes the bytes.
+#[derive(Clone)]
 pub struct Key(pub [u8; KEY_LEN]);
+
+impl core::fmt::Debug for Key {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Key { .. }")
+    }
+}
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        ct_eq(&self.0, &other.0) == 1
+    }
+}
+impl Eq for Key {}
+
+impl Drop for Key {
+    fn drop(&mut self) {
+        zeroize(&mut self.0);
+    }
+}
 
 /// AEAD nonce (public, but must be unique per message under one key).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,8 +121,12 @@ fn mac_tag(mac_key: &[u8; KEY_LEN], nonce: &Nonce, ad: &[u8], ct: &[u8]) -> [u8;
 
 /// Message fits the 32-bit `ChaCha20` block space (public length check).
 fn fits_block_space(len: usize) -> bool {
-    // `len/64` blocks needed; valid counters are `0..=u32::MAX`.
-    u32::try_from((len as u64) / 64).is_ok()
+    // Counters `0..=u32::MAX` cover exactly `2^32` blocks = `MAX_MSG_LEN`
+    // bytes; anything larger would wrap the counter.
+    match u64::try_from(len) {
+        Ok(n) => n <= MAX_MSG_LEN,
+        Err(_) => false,
+    }
 }
 
 /// Encrypt + authenticate. Requires `ct.len() == pt.len()` and a message
@@ -133,6 +162,8 @@ pub fn seal(
     tag: &mut [u8; TAG_LEN],
 ) -> Option<()> {
     if ct.len() != pt.len() || !fits_block_space(pt.len()) {
+        zeroize(ct);
+        zeroize(tag);
         return None;
     }
     let (mut enc, mut mac) = subkeys(key);
@@ -143,6 +174,7 @@ pub fn seal(
     }
     if xor_in_place(&enc, &nonce.0, 0, ct) != ct.len() {
         zeroize(ct);
+        zeroize(tag);
         zeroize(&mut enc);
         zeroize(&mut mac);
         return None;
@@ -286,15 +318,15 @@ mod tests {
     #[test]
     fn block_space_boundaries() {
         // Predicate-only (no 256 GiB allocation): `MAX_MSG_LEN` is
-        // `2^32` blocks, so `2^38 - 1` bytes fit and `2^38` do not.
+        // `2^32` blocks, so exactly `2^38` bytes fit and one more does not.
         assert!(fits_block_space(0));
         assert!(fits_block_space(63));
         assert!(fits_block_space(64));
-        let max_ok = usize::try_from(MAX_MSG_LEN - 1).unwrap_or(0);
-        assert!(fits_block_space(max_ok));
-        let min_bad = usize::try_from(MAX_MSG_LEN).unwrap_or(usize::MAX);
-        assert!(!fits_block_space(min_bad));
-        assert!(!fits_block_space(usize::MAX));
+        if let Ok(max_ok) = usize::try_from(MAX_MSG_LEN) {
+            assert!(fits_block_space(max_ok));
+            assert!(!fits_block_space(max_ok.saturating_add(1)));
+            assert!(!fits_block_space(usize::MAX));
+        }
     }
     #[test]
     fn nonce_reuse_documents_determinism() {
@@ -349,6 +381,20 @@ mod tests {
         let mut k = key();
         k.zeroize();
         assert_eq!(k.0, [0u8; KEY_LEN]);
+    }
+
+    #[test]
+    fn key_debug_is_redacted() {
+        assert_eq!(std::format!("{:?}", key()), "Key { .. }");
+    }
+
+    #[test]
+    fn failed_seal_clears_outputs() {
+        let mut ct = [0xAAu8; 4];
+        let mut tag = [0xAAu8; TAG_LEN];
+        assert!(seal(&key(), &nonce(), b"", b"too long", &mut ct, &mut tag).is_none());
+        assert_eq!(ct, [0u8; 4]);
+        assert_eq!(tag, [0u8; TAG_LEN]);
     }
 
     #[test]

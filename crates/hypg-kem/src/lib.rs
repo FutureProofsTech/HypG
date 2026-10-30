@@ -31,7 +31,7 @@
 
 use hypg_core::b3::{b3_hash, b3_kdf};
 use hypg_core::caprf::ca_expand;
-use hypg_core::ct::{ct_eq, ct_select};
+use hypg_core::ct::{ct_eq, ct_select, zeroize, zeroize_u16};
 use hypg_core::params::{
     B_PACKED_LEN, C1_VEC_PACKED_LEN, C2_PACKED_LEN, CBD_RAND_LEN, CT_LEN, FAKE_LEN, MODULE_K,
     MSG_LEN, PK_LEN, POLY_PACKED_LEN, SEED_LEN, SK_LEN, SS_LEN,
@@ -56,16 +56,60 @@ const D_REJECT: &[u8] = b"HYP-G/v07/reject";
 pub struct PublicKey(pub [u8; PK_LEN]);
 
 /// Secret key: `seed(32) || fake(32) || pk(1568)` = 1632 bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Not `Copy` (duplication is explicit via `clone`), `Debug` is redacted,
+/// equality is constant-time, and `Drop` best-effort zeroizes the bytes.
+#[derive(Clone)]
 pub struct SecretKey(pub [u8; SK_LEN]);
+
+impl core::fmt::Debug for SecretKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SecretKey { .. }")
+    }
+}
+
+impl PartialEq for SecretKey {
+    fn eq(&self, other: &Self) -> bool {
+        ct_eq(&self.0, &other.0) == 1
+    }
+}
+impl Eq for SecretKey {}
+
+impl Drop for SecretKey {
+    fn drop(&mut self) {
+        zeroize(&mut self.0);
+    }
+}
 
 /// Ciphertext: `pack10(c1_vec)(1280) || pack5(c2)(160)` = 1440 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ciphertext(pub [u8; CT_LEN]);
 
 /// Shared secret: 32 bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Not `Copy`; `Debug` is redacted, equality is constant-time, and `Drop`
+/// best-effort zeroizes the bytes.
+#[derive(Clone)]
 pub struct SharedSecret(pub [u8; SS_LEN]);
+
+impl core::fmt::Debug for SharedSecret {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SharedSecret { .. }")
+    }
+}
+
+impl PartialEq for SharedSecret {
+    fn eq(&self, other: &Self) -> bool {
+        ct_eq(&self.0, &other.0) == 1
+    }
+}
+impl Eq for SharedSecret {}
+
+impl Drop for SharedSecret {
+    fn drop(&mut self) {
+        zeroize(&mut self.0);
+    }
+}
 
 impl PublicKey {
     /// Raw bytes.
@@ -223,8 +267,10 @@ fn poly_s_vec(master: &[u8; SEED_LEN]) -> [Poly; MODULE_K] {
             j += 1;
         }
         out[k] = cbd_eta2(&r128);
+        zeroize(&mut r128);
         k += 1;
     }
+    zeroize(&mut buf);
     out
 }
 
@@ -242,8 +288,10 @@ fn poly_e_vec(master: &[u8; SEED_LEN]) -> [Poly; MODULE_K] {
             j += 1;
         }
         out[k] = cbd_eta2(&r128);
+        zeroize(&mut r128);
         k += 1;
     }
+    zeroize(&mut buf);
     out
 }
 
@@ -257,6 +305,15 @@ fn derive_seed_a(master: &[u8; SEED_LEN]) -> [u8; SEED_LEN] {
 /// Single `CBD` poly from 128-byte buffer helper.
 fn cbd_from_buf(buf128: &[u8; CBD_RAND_LEN]) -> Poly {
     cbd_eta2(buf128)
+}
+
+/// Best-effort erasure for a vector of secret polynomials.
+fn zeroize_polys(polys: &mut [Poly]) {
+    let mut i = 0usize;
+    while i < polys.len() {
+        zeroize_u16(&mut polys[i].0);
+        i += 1;
+    }
 }
 
 /// Encryption randomness `(r_vec, e1_vec, e2)` from `(m, pk)` via `CA-PRF`
@@ -287,6 +344,7 @@ fn derive_rand(m: &[u8; MSG_LEN], pk: &[u8; PK_LEN]) -> ([Poly; MODULE_K], [Poly
             i += 1;
         }
         b3_hash(&buf[..o], &mut rseed);
+        zeroize(&mut buf);
     }
     let mut br = [0u8; MODULE_K * CBD_RAND_LEN];
     let mut b1 = [0u8; MODULE_K * CBD_RAND_LEN];
@@ -308,9 +366,16 @@ fn derive_rand(m: &[u8; MSG_LEN], pk: &[u8; PK_LEN]) -> ([Poly; MODULE_K], [Poly
         }
         r[k] = cbd_from_buf(&rr);
         e1[k] = cbd_from_buf(&ee);
+        zeroize(&mut rr);
+        zeroize(&mut ee);
         k += 1;
     }
-    (r, e1, cbd_from_buf(&b2))
+    let e2 = cbd_from_buf(&b2);
+    zeroize(&mut rseed);
+    zeroize(&mut br);
+    zeroize(&mut b1);
+    zeroize(&mut b2);
+    (r, e1, e2)
 }
 
 /// Raw PKE encrypt: `(c1_vec, c2)`. `m` is the 32-byte FO message.
@@ -330,15 +395,23 @@ fn pke_encrypt(
         let mut t = Poly::zero();
         let mut i = 0usize;
         while i < MODULE_K {
-            t = t.add(&mat[i][row].mul(&r[i]));
+            let mut prod = mat[i][row].mul(&r[i]);
+            t = t.add(&prod);
+            zeroize_u16(&mut prod.0);
             i += 1;
         }
         c1[row] = t.add(&e1[row]);
+        zeroize_u16(&mut t.0);
         row += 1;
     }
     // `c2 = b^T·r + e2 + encode(m)`.
-    let bt_r = dot(b_vec, r);
-    let c2 = bt_r.add(e2).add(&Poly::encode(m));
+    let mut bt_r = dot(b_vec, r);
+    let mut acc = bt_r.add(e2);
+    let mut m_poly = Poly::encode(m);
+    let c2 = acc.add(&m_poly);
+    zeroize_u16(&mut bt_r.0);
+    zeroize_u16(&mut acc.0);
+    zeroize_u16(&mut m_poly.0);
     (c1, c2)
 }
 
@@ -413,16 +486,19 @@ fn unpack_ct(ct: &[u8; CT_LEN]) -> ([Poly; MODULE_K], Poly) {
 pub fn keygen(seed: &[u8; SEED_LEN]) -> (PublicKey, SecretKey) {
     let seed_a = derive_seed_a(seed);
     let mat = poly_a_mat(&seed_a);
-    let s = poly_s_vec(seed);
-    let e = poly_e_vec(seed);
+    let mut s = poly_s_vec(seed);
+    let mut e = poly_e_vec(seed);
     // `b = A·s + e`.
     let mut b = [Poly::zero(); MODULE_K];
     let mut row = 0usize;
     while row < MODULE_K {
-        let t = dot(&mat[row], &s);
+        let mut t = dot(&mat[row], &s);
         b[row] = t.add(&e[row]);
+        zeroize_u16(&mut t.0);
         row += 1;
     }
+    zeroize_polys(&mut s);
+    zeroize_polys(&mut e);
     let mut pk_bytes = [0u8; PK_LEN];
     let mut i = 0usize;
     while i < SEED_LEN {
@@ -457,7 +533,10 @@ pub fn keygen(seed: &[u8; SEED_LEN]) -> (PublicKey, SecretKey) {
         sk_bytes[SEED_LEN + FAKE_LEN + p] = pk_bytes[p];
         p += 1;
     }
-    (PublicKey(pk_bytes), SecretKey(sk_bytes))
+    let out = (PublicKey(pk_bytes), SecretKey(sk_bytes));
+    zeroize(&mut sk_bytes);
+    zeroize(&mut fake);
+    out
 }
 
 /// Encapsulate to `pk` with caller-supplied `coins` (32 B FO message).
@@ -466,37 +545,44 @@ pub fn keygen(seed: &[u8; SEED_LEN]) -> (PublicKey, SecretKey) {
 pub fn encaps(pk: &PublicKey, coins: &[u8; SEED_LEN]) -> (Ciphertext, SharedSecret) {
     let (seed_a, b_vec) = parse_pk(&pk.0);
     let mat = poly_a_mat(&seed_a);
-    let (r, e1, e2) = derive_rand(coins, &pk.0);
+    let (mut r, mut e1, mut e2) = derive_rand(coins, &pk.0);
     let (c1, c2) = pke_encrypt(&mat, &b_vec, coins, &r, &e1, &e2);
+    zeroize_polys(&mut r);
+    zeroize_polys(&mut e1);
+    zeroize_u16(&mut e2.0);
     let ct = pack_ct(&c1, &c2);
     let mut pk_hash = [0u8; 32];
     b3_hash(&pk.0, &mut pk_hash);
     let mut ss = [0u8; SS_LEN];
     b3_kdf(&mut ss, &[coins.as_slice(), ct.as_slice(), pk_hash.as_slice()], D_SS);
-    (Ciphertext(ct), SharedSecret(ss))
+    let out = (Ciphertext(ct), SharedSecret(ss));
+    zeroize(&mut ss);
+    out
 }
 
 /// Decapsulate with implicit rejection. Never fails; wrong `ct` yields
 /// a pseudorandom `ss` derived from the fake key (constant-time select).
 #[must_use]
 pub fn decaps(sk: &SecretKey, ct: &Ciphertext) -> SharedSecret {
-    let master = sk.seed_copy();
-    let fake = sk.fake_copy();
-    let pk = sk.public_copy();
+    let mut master = sk.seed_copy();
+    let mut fake = sk.fake_copy();
+    let mut pk = sk.public_copy();
 
     let (seed_a, b_vec) = parse_pk(&pk);
     let mat = poly_a_mat(&seed_a);
-    let s = poly_s_vec(&master);
+    let mut s = poly_s_vec(&master);
 
     // Decrypt: `v = c2 - s^T·c1`, decode to `m'`.
-    let (c1, c2) = unpack_ct(&ct.0);
-    let st_c1 = dot(&s, &c1);
-    let m_cand = c2.sub(&st_c1).decode();
+    let (mut c1, mut c2) = unpack_ct(&ct.0);
+    let mut st_c1 = dot(&s, &c1);
+    let mut v = c2.sub(&st_c1);
+    let mut m_cand = v.decode();
+    zeroize_u16(&mut v.0);
 
     // Re-encryption check (FO): recompute `ct'` from `m'`.
-    let (r2, e12, e22) = derive_rand(&m_cand, &pk);
-    let (c1c, c2c) = pke_encrypt(&mat, &b_vec, &m_cand, &r2, &e12, &e22);
-    let ct_check = pack_ct(&c1c, &c2c);
+    let (mut r2, mut e12, mut e22) = derive_rand(&m_cand, &pk);
+    let (mut c1c, mut c2c) = pke_encrypt(&mat, &b_vec, &m_cand, &r2, &e12, &e22);
+    let mut ct_check = pack_ct(&c1c, &c2c);
     let ok = ct_eq(&ct_check, &ct.0);
 
     let mut pk_hash = [0u8; 32];
@@ -508,7 +594,27 @@ pub fn decaps(sk: &SecretKey, ct: &Ciphertext) -> SharedSecret {
 
     let mut ss = [0u8; SS_LEN];
     ct_select(&mut ss, &ss_ok, &ss_rej, ok);
-    SharedSecret(ss)
+    let out = SharedSecret(ss);
+
+    zeroize(&mut ss);
+    zeroize(&mut ss_ok);
+    zeroize(&mut ss_rej);
+    zeroize(&mut pk_hash);
+    zeroize(&mut ct_check);
+    zeroize(&mut m_cand);
+    zeroize_u16(&mut st_c1.0);
+    zeroize_u16(&mut c2.0);
+    zeroize_u16(&mut c2c.0);
+    zeroize_polys(&mut c1);
+    zeroize_polys(&mut c1c);
+    zeroize_polys(&mut s);
+    zeroize_polys(&mut r2);
+    zeroize_polys(&mut e12);
+    zeroize_u16(&mut e22.0);
+    zeroize(&mut master);
+    zeroize(&mut fake);
+    zeroize(&mut pk);
+    out
 }
 
 /// Length / layout sanity (public, testable).

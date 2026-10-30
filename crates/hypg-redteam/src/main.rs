@@ -25,6 +25,8 @@
 //! `HYPG_REDTEAM_FLIPS` (`1..=CT_LEN`, `all` = every ciphertext bit,
 //! default 48).
 
+#![forbid(unsafe_code)]
+
 use hypg_core::params::{CT_LEN, PK_LEN, SK_LEN};
 use hypg_core::poly::cbd_eta2;
 use hypg_kem::{decaps, encaps, keygen};
@@ -88,7 +90,6 @@ fn s1() -> (bool, String) {
 /// `HYPG_REDTEAM_FLIPS=all`, every bit of every byte is flipped
 /// (`n == 8*CT_LEN`, full ciphertext-bit sweep — release only in practice).
 fn s2(n: usize) -> (bool, String) {
-    use hypg_core::params::CT_LEN;
     let (pk, sk) = keygen(&[0x42u8; 32]);
     let (ct, ss) = encaps(&pk, &[0x11u8; 32]);
     let mut unchanged = 0u32;
@@ -336,7 +337,6 @@ fn s10() -> (bool, String) {
 
 /// `S11a`: KEM fault injection — burst faults, tampered `pk`, garbage matrix.
 fn s11a() -> (bool, String) {
-    use hypg_core::params::CT_LEN;
     // A. Burst faults: 2/3/4-bit deterministic bursts must all change `ss`.
     let (pk, sk) = keygen(&[0x42u8; 32]);
     let (ct, ss) = encaps(&pk, &[0x11u8; 32]);
@@ -489,7 +489,6 @@ impl Corpus {
 /// `S12a`: KEM corpus — random keys/ciphertexts must not panic; the
 /// honest pair inside the loop must always round-trip.
 fn s12a(rng: &mut Corpus) -> (bool, String) {
-    use hypg_core::params::SK_LEN;
     let (pk0, sk0) = keygen(&[0x5Au8; 32]);
     let mut panics = 0u32;
     let mut violations = 0u32;
@@ -669,7 +668,6 @@ fn s12() -> (bool, String) {
 /// fake corruption must be invisible on the honest path yet change the
 /// reject output (proves the spare is actually wired in).
 fn s13() -> (bool, String) {
-    use hypg_core::params::SK_LEN;
     let (pk, sk) = keygen(&[0x42u8; 32]);
     let (ct, ss) = encaps(&pk, &[0x11u8; 32]);
     let mut bad_ct = ct;
@@ -680,7 +678,7 @@ fn s13() -> (bool, String) {
     // Seed + embedded-pk regions: exchange must break, cleanly.
     for pos in [0usize, 17, 31, 64, 200, SK_LEN - 1] {
         for bit in [0u32, 3, 7] {
-            let mut skb = sk;
+            let mut skb = sk.clone();
             skb.0[pos] ^= 1u8 << bit;
             n += 1;
             match std::panic::catch_unwind(|| decaps(&skb, &ct)) {
@@ -696,7 +694,7 @@ fn s13() -> (bool, String) {
     // Fake-key region: honest path unchanged, reject path diverges.
     for pos in [32usize, 47, 63] {
         for bit in [0u32, 3, 7] {
-            let mut skb = sk;
+            let mut skb = sk.clone();
             skb.0[pos] ^= 1u8 << bit;
             n += 1;
             match std::panic::catch_unwind(|| (decaps(&skb, &ct), decaps(&skb, &bad_ct))) {

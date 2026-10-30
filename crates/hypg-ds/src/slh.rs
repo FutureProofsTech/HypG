@@ -23,8 +23,30 @@ const D_PRF: &[u8] = b"HYP-G/v07/ds-prf";
 pub struct SigPk(pub [u8; SIG_PK_LEN]);
 
 /// Secret key: `esk(32) || prf(32) || pubseed(32) || root(32)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Not `Copy`; `Debug` is redacted, equality is constant-time, and `Drop`
+/// best-effort zeroizes the bytes.
+#[derive(Clone)]
 pub struct SigSk(pub [u8; SIG_SK_LEN]);
+
+impl core::fmt::Debug for SigSk {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SigSk { .. }")
+    }
+}
+
+impl PartialEq for SigSk {
+    fn eq(&self, other: &Self) -> bool {
+        hypg_core::ct::ct_eq(&self.0, &other.0) == 1
+    }
+}
+impl Eq for SigSk {}
+
+impl Drop for SigSk {
+    fn drop(&mut self) {
+        zeroize(&mut self.0);
+    }
+}
 
 impl SigPk {
     /// Raw bytes.
@@ -82,7 +104,10 @@ fn randomizer(prf_seed: &[u8; N], msg: &[u8]) -> [u8; N] {
     let mut h = Hasher::new();
     h.update(&stream);
     h.update(&mhash);
-    h.finalize32()
+    let out = h.finalize32();
+    zeroize(&mut stream);
+    zeroize(&mut mhash);
+    out
 }
 
 /// Message digest `md[64]`: binds `R`, `pubseed`, `root`, `msg`.
@@ -174,18 +199,23 @@ pub fn ds_keygen(esk: &[u8; N]) -> (SigPk, SigSk) {
         sk[2 * N + i] = pubseed[i];
         i += 1;
     }
-    (SigPk(pk), SigSk(sk))
+    let out = (SigPk(pk), SigSk(sk));
+    zeroize(&mut prf);
+    zeroize(&mut sk);
+    out
 }
 
 /// Signing prelude: hedged randomizer, digest split, and the secret key
 /// material a signer needs. Pure function of `(sk, msg)`; the returned
 /// components feed independent parallel units in threaded signers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The master secret `esk` is private (accessor [`PreSign::esk`]); `Debug`
+/// is redacted and `Drop` best-effort zeroizes it.
 pub struct PreSign {
     /// Hedged randomizer `R`.
     pub r: [u8; N],
     /// Master secret seed.
-    pub esk: [u8; N],
+    esk: [u8; N],
     /// Public seed.
     pub pubseed: [u8; N],
     /// FORS leaf indices (`FORS_K × FORS_A` bits).
@@ -196,14 +226,43 @@ pub struct PreSign {
     pub leaf: u32,
 }
 
+impl PreSign {
+    /// Master secret seed (borrowed; never rendered by `Debug`).
+    #[must_use]
+    pub const fn esk(&self) -> &[u8; N] {
+        &self.esk
+    }
+}
+
+impl core::fmt::Debug for PreSign {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PreSign")
+            .field("r", &self.r)
+            .field("pubseed", &self.pubseed)
+            .field("fors_idx", &self.fors_idx)
+            .field("tree_idx", &self.tree_idx)
+            .field("leaf", &self.leaf)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for PreSign {
+    fn drop(&mut self) {
+        zeroize(&mut self.esk);
+    }
+}
+
 /// Compute [`PreSign`] (fast: two hashes + splits, no trees).
 #[must_use]
 pub fn pre_sign(sk: &SigSk, msg: &[u8]) -> PreSign {
-    let (esk, prf_seed, pubseed, root) = sk_parts(&sk.0);
+    let (mut esk, mut prf_seed, pubseed, root) = sk_parts(&sk.0);
     let r = randomizer(&prf_seed, msg);
+    zeroize(&mut prf_seed);
     let md = digest(&r, &pubseed, &root, msg);
     let (fors_idx, tree_idx, leaf) = split(&md);
-    PreSign { r, esk, pubseed, fors_idx, tree_idx, leaf }
+    let ctx = PreSign { r, esk, pubseed, fors_idx, tree_idx, leaf };
+    zeroize(&mut esk);
+    ctx
 }
 
 /// Serialize `R ‖ FORS ×FORS_K ‖ layers ×D` into the exact `SIG_LEN`
@@ -276,6 +335,39 @@ pub fn serialize_sig(
     debug_assert_eq!(o, SIG_LEN);
 }
 
+/// Best-effort erasure for a FORS signature (contains revealed secret
+/// leaves and local auth-path copies).
+fn zeroize_fors(sig: &mut ForsSig) {
+    let mut t = 0usize;
+    while t < FORS_K {
+        zeroize(&mut sig[t].0);
+        let mut h = 0usize;
+        while h < FORS_A {
+            zeroize(&mut sig[t].1[h]);
+            h += 1;
+        }
+        t += 1;
+    }
+}
+
+/// Best-effort erasure for a hypertree signature's local copy.
+fn zeroize_layers(sig: &mut [LayerSig; D]) {
+    let mut l = 0usize;
+    while l < D {
+        let mut c = 0usize;
+        while c < WOTS_LEN {
+            zeroize(&mut sig[l].0[c]);
+            c += 1;
+        }
+        let mut h = 0usize;
+        while h < HP {
+            zeroize(&mut sig[l].1[h]);
+            h += 1;
+        }
+        l += 1;
+    }
+}
+
 /// Sign `msg` into `sig_out` (exact `SIG_LEN` bytes, caller buffer).
 /// Composes [`pre_sign`] + trees + [`serialize_sig`]; threaded signers
 /// produce byte-identical output through the same pieces.
@@ -294,10 +386,12 @@ pub fn serialize_sig(
 #[allow(clippy::many_single_char_names)]
 pub fn ds_sign(sk: &SigSk, msg: &[u8], sig_out: &mut [u8; SIG_LEN]) {
     let ctx = pre_sign(sk, msg);
-    let fors_sig = fors::fors_sign(&ctx.pubseed, &ctx.esk, &ctx.fors_idx);
+    let mut fors_sig = fors::fors_sign(&ctx.pubseed, ctx.esk(), &ctx.fors_idx);
     let fors_pk = fors::fors_verify(&ctx.pubseed, &ctx.fors_idx, &fors_sig);
-    let ht_sig = hypertree::ht_sign(&ctx.pubseed, &ctx.esk, ctx.tree_idx, ctx.leaf, &fors_pk);
+    let mut ht_sig = hypertree::ht_sign(&ctx.pubseed, ctx.esk(), ctx.tree_idx, ctx.leaf, &fors_pk);
     serialize_sig(&ctx.r, &fors_sig, &ht_sig, sig_out);
+    zeroize_fors(&mut fors_sig);
+    zeroize_layers(&mut ht_sig);
 }
 
 /// Verify: `false` on any malformation (length checked first, public).

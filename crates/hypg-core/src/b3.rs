@@ -20,6 +20,10 @@
     clippy::cast_lossless
 )]
 
+use core::fmt;
+
+use crate::ct::{zeroize, zeroize_u32};
+
 const IV: [u32; 8] = [
     0x6A09_E667,
     0xBB67_AE85,
@@ -174,7 +178,11 @@ fn parent_cv(key: &[u32; 8], left: &[u8; 32], right: &[u8; 32], flags: u32, out:
 }
 
 /// Streaming hasher: chunk state + fixed CV stack. No allocation, `no_std`.
-#[derive(Clone, Debug)]
+///
+/// The struct holds the MAC key and all intermediate chaining state, so
+/// `Debug` is deliberately redacted and `Drop` best-effort zeroizes the
+/// keyed material.
+#[derive(Clone)]
 pub struct Hasher {
     key: [u32; 8],
     flags: u32,
@@ -185,6 +193,26 @@ pub struct Hasher {
     blocks_compressed: u32,
     stack: [[u8; 32]; STACK_DEPTH],
     stack_len: usize,
+}
+
+impl fmt::Debug for Hasher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Never render `key`, `cv`, `buf`, or `stack`.
+        f.write_str("Hasher { .. }")
+    }
+}
+
+impl Drop for Hasher {
+    fn drop(&mut self) {
+        zeroize_u32(&mut self.key);
+        zeroize_u32(&mut self.cv);
+        zeroize(&mut self.buf);
+        let mut i = 0usize;
+        while i < STACK_DEPTH {
+            zeroize(&mut self.stack[i]);
+            i += 1;
+        }
+    }
 }
 
 impl Hasher {
@@ -553,6 +581,7 @@ pub fn b3_derive_key(context: &str, key_material: &[u8; 32], out: &mut [u8; OUT_
     };
     m.update(key_material);
     *out = m.finalize32();
+    zeroize_u32(&mut ctx_key);
 }
 
 /// Expander replacing `hypg_xof`: `XOF(seed || domain)`.
@@ -578,6 +607,14 @@ pub fn b3_kdf(out: &mut [u8], parts: &[&[u8]], domain: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hasher_debug_is_redacted() {
+        let h = Hasher::new_keyed(&[0x42u8; 32]);
+        let rendered = std::format!("{h:?}");
+        assert_eq!(rendered, "Hasher { .. }");
+        assert!(!rendered.contains("42"));
+    }
 
     /// Parse even-length hex into `out`, returning byte length.
     fn parse_hex(s: &str, out: &mut [u8; 128]) -> usize {
