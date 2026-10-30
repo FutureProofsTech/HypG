@@ -1,261 +1,1598 @@
 \documentclass[11pt,a4paper]{article}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage{amsmath,amssymb}
-\usepackage{booktabs}
-\usepackage{xcolor}
-\usepackage{hyperref}
-\hypersetup{colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black}
-\usepackage{amsthm}
-\newtheorem{defn}{Definition}[section]
-\newtheorem{prop}{Proposition}[section]
 
-\title{HypG: Formal Specification\\[0.5ex]
-\large Yellow Paper --- Normative Algorithms, Parameters, and Contracts (v2.0)}
-\author{HypG Project}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs,array,longtable,tabularx,enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,
+            linkcolor=blue!55!black,
+            citecolor=blue!55!black,
+            urlcolor=blue!55!black]{hyperref}
+\usepackage{url}
+
+\hypersetup{
+  pdftitle={HypG v2.0.1: Normative Specification},
+  pdfauthor={HypG Project},
+  pdfsubject={Yellow Paper: algorithms, wire formats, and conformance contracts},
+  pdfkeywords={post-quantum cryptography, Module-LWE, BLAKE3, ChaCha20, FORS, WOTS+, XMSS, specification}
+}
+
+\setlength{\emergencystretch}{2.5em}
+\allowdisplaybreaks
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\concat}{\,\Vert\,}
+\newcommand{\bits}{\{0,1\}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\Ring}{\mathcal{R}_q}
+\newcommand{\Hash}{\mathsf{H}}
+\newcommand{\XOF}{\mathsf{XOF}}
+\newcommand{\KDF}{\mathsf{KDF}}
+\newcommand{\PRF}{\mathsf{PRF}}
+\newcommand{\KeyGen}{\mathsf{KeyGen}}
+\newcommand{\Encaps}{\mathsf{Encaps}}
+\newcommand{\Decaps}{\mathsf{Decaps}}
+\newcommand{\Encode}{\mathsf{Encode}}
+\newcommand{\Decode}{\mathsf{Decode}}
+\newcommand{\Pack}{\mathsf{Pack}}
+\newcommand{\Unpack}{\mathsf{Unpack}}
+\newcommand{\Sign}{\mathsf{Sign}}
+\newcommand{\Verify}{\mathsf{Verify}}
+\newcommand{\CBD}{\mathrm{CBD}}
+\newcommand{\Compress}{\mathrm{Compress}}
+\newcommand{\Decompress}{\mathrm{Decompress}}
+\newcommand{\negl}{\mathsf{negl}}
+\newcommand{\poly}{\mathsf{poly}}
+\newcommand{\ppt}{\mathsf{PPT}}
+\newcommand{\adv}{\mathcal{A}}
+\newcommand{\ro}{\mathcal{O}}
+
+\newenvironment{steps}[1]
+  {\par\medskip\noindent\textbf{#1}\par\nopagebreak\small
+   \begin{enumerate}[label=\arabic*:,leftmargin=*]}
+  {\end{enumerate}\par\medskip}
+
+\title{\textbf{HypG v2.0.1: Normative Specification}\\[0.4ex]
+\large A Module-LWE KEM, Symmetric AEAD, and Stateless\\
+Hash-Based Signature Scheme\\[0.3ex]
+\normalsize Yellow Paper --- Algorithms, Wire Formats, and Conformance Contracts\\[0.2ex]
+\small Workspace 2.0.0; KEM/Symm/Hash 2.0.0; DS 2.0.1}
+
+\author{HypG Project\\
+\small Independent research prototype}
 \date{October 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This document normatively specifies HypG v2.0: parameters, algorithms,
-sizes, domain strings, API contracts, and test-vector inventory.  It is
-the frozen companion to the implementation; in case of divergence, the
-frozen KAT files decide.  v2.0 is a breaking parameter-hardening
-release (KEM $k=4$; signatures in the 256f shape).  The
-\texttt{HYP-G/v07/...} domains and symmetric primitives are unchanged.
-This paper makes no security claim --- see the White Paper and
-\texttt{docs/threat-model.md}.
+This document is the normative specification of the HypG research
+prototype.  It defines the byte-level encodings, algorithms, domain
+separators, API contracts, and frozen test-vector inventory for the
+Module-LWE KEM, the BLAKE3 hash/XOF/keyed-hash layer, the
+ChaCha20 plus keyed-BLAKE3 authenticated-encryption scheme (one-shot
+and streaming), and the stateless hash-based signature scheme.  The
+workspace version is 2.0.0; the signature wire/spec revision is
+separately identified as \textbf{2.0.1} because of two changes: the
+explicit one-byte $\PRF$/$F$ domain tags and FIPS-205-style promotion of
+odd WOTS+ L-tree nodes.
+
+The document is normative for behaviour, not for security.  It does not
+assert IND-CCA2, UF-CMA, SUF-CMA, or AEAD security for the exact
+constructions.  It does not claim NIST Category-5 security, FIPS
+conformance, certification, constant-time machine code, or side-channel
+resistance.  In case of disagreement, the Rust implementation and the
+frozen KAT files take precedence over this prose.
 \end{abstract}
+
+\noindent\textbf{Keywords:} specification; Module-LWE; Fujisaki--Okamoto;
+implicit rejection; BLAKE3; ChaCha20; Encrypt-then-MAC; FORS; WOTS+;
+XMSS; hypertree; safe Rust; known-answer tests.
+
+\medskip
+\noindent\textbf{Document status.} Normative technical report for the
+v2.0 artifact.  It is not peer-reviewed, not an audit, and not a
+security certification.
 
 \tableofcontents
 \newpage
 
 %======================================================================
-\section{Notation and conventions}
+\section{Scope, status, and normative precedence}
+\label{sec:scope}
 
-Bytes are octets; all multi-byte integers serialize little-endian
-(explicit \texttt{le} conversions everywhere; no native-endian
-operations exist in the libraries).  $\|$ denotes concatenation,
-$\oplus$ byte-wise xor.  Security parameter: 128-bit post-quantum
-target (stated goal, unconfirmed).  ``Public'' means attacker-visible
-(lengths, indices, counters); ``secret'' means key/message-derived.
+\subsection{Document identity}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Artifact & Code version & Wire/spec revision & Frozen vectors \\
+\midrule
+Workspace & 2.0.0 & --- & --- \\
+KEM & 2.0.0 & KEM v2.0 & \texttt{kats/v2.0.0.txt} \\
+Symm / AEAD & 2.0.0 & Symm v2.0 & \texttt{kats-symm/v2.0.0.txt} \\
+Hash API & 2.0.0 & Hash v2.0 & \texttt{kats-hash/v2.0.0.txt} \\
+Signatures & 2.0.0 & \textbf{DS v2.0.1} & \texttt{kats-ds/v2.0.1.txt} \\
+\bottomrule
+\end{tabular}
+\caption{Version identity.  The literal \texttt{HYP-G/v07/...} strings
+are frozen domain separators, not a statement that the current
+parameter set is v0.7.}
+\label{tab:versions}
+\end{table}
+
+\subsection{Normative language}
+
+The key words MUST, MUST NOT, REQUIRED, SHALL, SHOULD, SHOULD NOT, MAY,
+and OPTIONAL are to be interpreted as described in RFC~2119~\cite{rfc2119}
+when they appear in this document.  In particular:
+
+\begin{itemize}[leftmargin=*]
+\item A conforming implementation MUST produce the bytes specified for
+  every algorithm in this document.
+\item A verifier MUST reject a malformed encoding as specified; it MUST
+  NOT silently accept an alternative encoding.
+\item A caller MUST satisfy the caller-side preconditions (fresh seeds,
+  fresh encapsulation messages, unique nonces, bounded signing volume,
+  and secret storage).
+\end{itemize}
+
+\subsection{Precedence}
+
+The final arbiters of behaviour are:
+
+\begin{enumerate}[leftmargin=*]
+\item the Rust code in \texttt{crates/};
+\item the active frozen KAT files in \texttt{crates/hypg-kat/};
+\item the normative algorithms and tables in this document.
+\end{enumerate}
+
+If the prose and the code disagree, the code and KATs win; the prose is
+then defective and must be corrected.  This is intentional: the
+specification is a research artifact, and silent divergence between
+paper and implementation is a bug.
+
+\subsection{Out of scope}
+
+This document does not specify a complete protocol.  It does not define
+key storage, RNG construction, nonce assignment, message framing, replay
+protection, identity binding, key confirmation, key rotation, or
+authorization.  Those are caller responsibilities.  The document also
+does not provide a security proof; see Section~\ref{sec:security}.
 
 %======================================================================
-\section{Parameters}
+\section{Notation and encodings}
+\label{sec:notation}
 
-\begin{center}
-\begin{tabular}{lll}
+\subsection{Bytes and integers}
+
+\begin{definition}[Byte string]
+A byte is an element of $\{0,\ldots,255\}$.  A byte string is a finite
+sequence of bytes; $\bits^n$ denotes bit strings of length $n$, and
+$\bits^*$ finite bit strings.
+\end{definition}
+
+\begin{definition}[Little-endian encoding]
+For an integer $x$ with $0\le x<2^t$, $\mathrm{LE}_t(x)$ is the
+$t/8$-byte encoding of $x$ with the least-significant byte first.  For
+example, $\mathrm{LE}_{32}(1)=01\,00\,00\,00$.
+\end{definition}
+
+Unless stated otherwise, every multi-byte integer in this specification
+is little-endian.  Byte ranges are half-open: $x[a:b]$ denotes bytes
+$a$ through $b-1$.  The symbol $\concat$ denotes concatenation.  No
+implicit padding is ever inserted.
+
+\subsection{Rings and vectors}
+
+\begin{definition}[Ring]
+Let
+\[
+  \Ring=\Z_q[X]/(X^{256}+1), \qquad q=4096=2^{12}.
+\]
+An element $a\in\Ring$ is represented by its coefficient vector
+$(a_0,\ldots,a_{255})$ with $a_i\in[0,q)$.  Addition and subtraction
+are coefficient-wise modulo $q$.
+\end{definition}
+
+\begin{definition}[Negacyclic multiplication]
+For $a,b\in\Ring$,
+\[
+ (a*b)_k=\sum_{\substack{i+j=k\\0\le i,j<256}}a_i b_j
+        -\sum_{\substack{i+j=k+256\\0\le i,j<256}}a_i b_j
+ \pmod q.
+\]
+\end{definition}
+
+The implementation evaluates the two sums directly with an integer
+accumulator and reduces modulo $q$ with a 12-bit mask.  The loop bounds
+are public.  For module rank $k=4$, vectors are written
+$a=(a_0,\ldots,a_{k-1})$ and
+$\langle a,b\rangle=\sum_{i=0}^{k-1}a_i b_i$.
+
+\subsection{The CBD distribution}
+
+\begin{definition}[$\CBD(2)$]
+On 128 uniformly random bytes, let $b_0,b_1,b_2,b_3$ be the four
+successive bits for a coefficient.  Define
+\[
+ v=(b_0+b_1)-(b_2+b_3).
+\]
+The coefficient is $v$ mapped to $[0,q)$ by adding $q$ and masking.
+\end{definition}
+
+\begin{lemma}[CBD moments]
+\label{lem:cbd}
+For $\CBD(2)$, the support is $\{-2,-1,0,1,2\}$ and
+\[
+ \Pr[-2]=1/16,\quad \Pr[-1]=4/16,\quad \Pr[0]=6/16,\quad
+ \Pr[1]=4/16,\quad \Pr[2]=1/16.
+\]
+The mean is $0$ and the variance is $1$.
+\end{lemma}
+
+\begin{proof}
+The distribution is the difference of two independent
+$\mathrm{Binomial}(2,1/2)$ variables.  Its probability generating
+function is $(1/4+1/2z+1/4z^2)(1/4+1/2z^{-1}+1/4z^{-2})$, whose
+coefficients are the probabilities above.  The mean is the difference of
+the two binomial means, and the variance is the sum of the two
+variances $2\cdot(1/2)(1/2)=1/2$.
+\end{proof}
+
+%======================================================================
+\section{Core primitive: CA-PRF}
+\label{sec:caprf}
+
+\subsection{State and round function}
+
+\begin{definition}[CA state and rule]
+A CA state is a vector $S\in(\Z_{2^{64}})^{32}$, serialized as 32
+little-endian 64-bit words (256 bytes).  A CA rule is a vector
+$R\in(\Z_{2^{64}})^8$, serialized as eight little-endian 64-bit words
+(64 bytes).  The public constants are
+\[
+ \begin{aligned}
+ \mathrm{RC\_BASE}&=0x9E3779B97F4A7C15,\\
+ \mathrm{RC\_STRIDE}&=0xBF58476D1CE4E5B9,\\
+ \mathrm{DIFF\_MUL}&=0xD6E8FEB86659FD93.
+ \end{aligned}
+\]
+\end{definition}
+
+\begin{definition}[One CA round]
+For round index $t\in[0,32)$ and word index $i\in[0,32)$, compute, with
+all arithmetic modulo $2^{64}$ and $\mathrm{ROTL}$ a 64-bit left
+rotation:
+\[
+\begin{aligned}
+ rc &= \mathrm{RC\_BASE}+(t+1)\cdot\mathrm{RC\_STRIDE},\\
+ a &= S_i,\quad b=S_{(i+1)\bmod 32},\quad
+ c=S_{(i+5)\bmod 32},\quad d=S_{(i+17)\bmod 32},\\
+ rk &= R_{i\bmod 8}\oplus rc\oplus
+       (i\cdot\mathrm{RC\_STRIDE}),\\
+ t_1 &= a\oplus\mathrm{ROTL}(b,13)\oplus\mathrm{ROTL}(c,7),\\
+ t_2 &= (t_1\land d)\oplus((\lnot t_1)\land b),\\
+ t_3 &= t_2+(rk\oplus(i+t)),\\
+ t_4 &= t_3\oplus\mathrm{ROTL}(t_3,29),\\
+ t_5 &= (t_4\cdot\mathrm{DIFF\_MUL})\oplus\mathrm{ROTL}(d,11),\\
+ S'_i &= t_5\oplus\mathrm{ROTL}(S_{(i+16)\bmod 32},17)\oplus rc.
+\end{aligned}
+\]
+The round is applied 32 times.
+\end{definition}
+
+All loops have public bounds.  The temporary array is zeroized after
+each round.  The implementation contains no secret-dependent branch or
+index in the round.
+
+\subsection{CA-PRF definition}
+
+\begin{definition}[CA-PRF]
+For a 32-byte seed $x$, public domain $d$, and output length $L$:
+\[
+\begin{aligned}
+ \mathit{init} &= \XOF(x\concat d\concat\texttt{"-init"},256),\\
+ \mathit{rule} &= \XOF(x\concat d,64),\\
+ S_0 &= \mathrm{LE}^{-1}_{64}(\mathit{init}),\\
+ S_{32} &= \mathrm{Round}^{32}(S_0;\mathit{rule}),\\
+ \mathit{out} &= \XOF(d\concat\mathrm{LE}_{64}(S_{32})
+   \concat d\concat\texttt{"-out"},L).
+\end{aligned}
+\]
+\end{definition}
+
+\begin{remark}[Domain truncation]
+The implementation copies at most 59 bytes of $d$ before
+\texttt{"-init"} and at most 60 bytes before \texttt{"-out"}.  Every
+protocol domain in Section~\ref{sec:domains} is shorter than these
+limits, so no truncation occurs.  The rule expansion uses the full $d$.
+\end{remark}
+
+\begin{remark}[Security role of the CA]
+The final BLAKE3 XOF is the security-relevant expander.  If BLAKE3 is a
+secure XOF or random oracle, the output is pseudorandom regardless of the
+CA.  The CA is a deterministic mixing and domain-separation stage, not
+an independently proven hardness assumption.
+\end{remark}
+
+\begin{lemma}[Prefix consistency]
+\label{lem:caprf-prefix}
+For fixed $(x,d)$ and $L_1\le L_2$, the first $L_1$ bytes of
+$\mathrm{CA\text{-}PRF}(x,d,L_2)$ equal
+$\mathrm{CA\text{-}PRF}(x,d,L_1)$.
+\end{lemma}
+
+\begin{proof}
+The state and all preceding stages are independent of $L$.  The final
+XOF is prefix-consistent by definition.
+\end{proof}
+
+%======================================================================
+\section{Hash, XOF, and KDF layer}
+\label{sec:hash}
+
+\subsection{Functions}
+
+\begin{definition}[Hash API]
+Let $\Hash(x)$ be unkeyed BLAKE3-256, $\Hash_k(x)$ keyed BLAKE3-256
+with 32-byte key $k$, and $\XOF(x,L)$ the first $L$ bytes of the
+BLAKE3 XOF.  Define
+\[
+\begin{aligned}
+ \mathrm{expand}(x,d,L) &= \XOF(x\concat d,L),\\
+ \mathrm{kdf}(d,\mathit{parts},L) &=
+   \XOF(d\concat\mathit{parts}_0\concat\mathit{parts}_1\concat\cdots,L),\\
+ \mathrm{derive}(c,k) &= \mathrm{BLAKE3.derive\_key}(c,k).
+\end{aligned}
+\]
+\end{definition}
+
+To avoid a proliferation of symbols, $\Hash$ is overloaded: it denotes
+the unkeyed one-argument hash in the KEM/hash layer and the keyed
+four-argument tweakable hash in the DS layer; the argument count and
+context disambiguate.
+
+BLAKE3 is the hash primitive of the suite~\cite{blake3}.  The KEM uses
+$\mathrm{expand}$ only through CA-PRF.  The KEM shared-secret derivation
+uses $\mathrm{kdf}$ with the domain
+\texttt{HYP-G/v07/ss} and the fixed-length parts $(m,ct,\Hash(pk))$.
+The rejection derivation uses the fixed-length parts
+$(\mathit{fake},ct)$.
+
+\begin{lemma}[XOF prefix property]
+\label{lem:xof-prefix}
+$\Hash(x)$ equals the first 32 bytes of $\XOF(x,64)$.
+\end{lemma}
+
+\begin{proof}
+This is the BLAKE3 root-bytes property and is pinned by the repository
+tests for empty, short, chunk-edge, and multi-chunk inputs.
+\end{proof}
+
+\subsection{Framing requirements}
+
+Neither $\mathrm{expand}$ nor $\mathrm{kdf}$ inserts separators or
+lengths.  A caller MUST ensure that its part sequence is injective.
+This specification uses fixed-length parts for every KDF call.  A new
+caller with variable-length parts MUST add explicit lengths or use
+\texttt{derive\_key}.
+
+\subsection{Streaming hasher}
+
+\texttt{Hasher} supports \texttt{new}, \texttt{new\_keyed},
+\texttt{update}, \texttt{finalize32}, and \texttt{finalize\_xof}.  The
+first 32 bytes of \texttt{finalize\_xof} equal \texttt{finalize32}.
+The implementation uses a fixed 54-level chaining-value stack and does
+not allocate.
+
+%======================================================================
+\section{Polynomial encodings and compression}
+\label{sec:poly}
+
+\subsection{Message encoding}
+
+\begin{definition}[Encode/Decode]
+For a 32-byte message $m$, let
+\[
+ \Encode(m)_i=2048\cdot((m_{\lfloor i/8\rfloor}\gg(i\bmod 8))\land1).
+\]
+For $v\in\Ring$, let
+\[
+ \Decode(v)_i=
+ \left(\left(\left((v_i+1024)\bmod q\right)\gg11\right)\land1\right),
+\]
+with the bits packed least-significant first.
+\end{definition}
+
+\subsection{Compression}
+
+\begin{definition}[10-bit and 5-bit compression]
+For a coefficient $c\in[0,q)$:
+\[
+ \begin{aligned}
+ \Compress_{10}(c)&=((c+2)\gg2)\land0x3FF,\\
+ \Decompress_{10}(c)&=(c\land0x3FF)\ll2,\\
+ \Compress_5(c)&=((c+64)\gg7)\land0x1F,\\
+ \Decompress_5(c)&=(c\land0x1F)\ll7.
+ \end{aligned}
+\]
+\end{definition}
+
+\begin{lemma}[Residual ranges]
+\label{lem:residual}
+For $c\in[0,q)$, write
+$\Delta_1=\Decompress_{10}(\Compress_{10}(c))-c\pmod q$ and
+$\Delta_2=\Decompress_5(\Compress_5(c))-c\pmod q$.  Interpreted in the
+signed range,
+\[
+ \Delta_1\in\{-1,0,1,2\},\qquad
+ \Delta_2\in\{-63,-62,\ldots,64\}.
+\]
+\end{lemma}
+
+\begin{proof}
+Write $c=4a+r$ with $0\le r<4$.  Then
+$\Compress_{10}(c)=a$ for $r\le1$ and $a+1$ for $r\ge2$, giving
+$\Delta_1=-r$ or $4-r$.  For the 5-bit case, write $c=128a+r$ with
+$0\le r<128$; the quotient is $a$ for $r<64$ and $a+1$ for $r\ge64$,
+giving $\Delta_2=-r$ or $128-r$.
+\end{proof}
+
+\subsection{Packing}
+
+\begin{definition}[12-bit packing]
+Two coefficients $c_0,c_1\in[0,4095]$ are packed into three bytes:
+\[
+ b_0=c_0\land0xFF,\quad
+ b_1=((c_0\gg8)\land0x0F)\lor((c_1\land0x0F)\ll4),\quad
+ b_2=(c_1\gg4)\land0xFF.
+\]
+\end{definition}
+
+The 10-bit and 5-bit packers use a little-endian bitstream:
+coefficient $i$ occupies bits $[i\cdot w,(i+1)\cdot w)$ for
+$w\in\{10,5\}$.
+
+\begin{lemma}[Packing bijectivity]
+\label{lem:pack}
+$\Pack_{12}/\Unpack_{12}$, $\Pack_{10}/\Unpack_{10}$, and
+$\Pack_5/\Unpack_5$ are inverse bijections on their fixed-size arrays.
+\end{lemma}
+
+\begin{proof}
+The 12-bit packing is a bijection because the three bytes contain
+exactly the 24 bits of the two 12-bit values in a fixed order.  The
+10-bit and 5-bit packers write each coefficient into a fixed bit range
+of a little-endian bitstream of exactly $256w$ bits; no overlapping
+writes and no unused prefix bits occur.
+\end{proof}
+
+%======================================================================
+\section{KEM specification}
+\label{sec:kem}
+
+\subsection{Parameters and wire sizes}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lrl@{}}
 \toprule
 Symbol & Value & Meaning \\
 \midrule
-$n$ & 256 & ring dimension, $R_q = \mathbb{Z}_q[X]/(X^{256}+1)$ \\
-$k$ & 4 & module rank (lattice dimension 1024) \\
-$q$ & $2^{12} = 4096$ & cipher modulus (mask-only reduction) \\
-$\eta$ & 2 & CBD parameter, coefficients in $\{-2,\ldots,2\}$ \\
-$msg$ & 32 B & FO message (1 bit/coefficient encoding) \\
-$PK$ & 1568 B & $\mathit{seed}_A(32) \,\|\, \mathrm{pack}_{12}(b)(1536)$ \\
-$CT$ & 1440 B & $\mathrm{pack}_{10}(c_1)(1280) \,\|\, \mathrm{pack}_{5}(c_2)(160)$ \\
-$SK$ & 1632 B & $\mathit{seed}(32) \,\|\, \mathit{fake}(32) \,\|\, pk(1568)$ \\
-$SS$ & 32 B & shared secret \\
-$w$ & 16 & WOTS+ base; chains run all $w-1 = 15$ steps \\
-$\ell_{\mathrm{WOTS}}$ & 67 & $64$ message digits $+$ $3$ checksum digits \\
-$K_{\mathrm{FORS}}$ & 35 & FORS trees; leaves per tree $2^9 = 512$ \\
-$D, h$ & 17 layers $\times$ height 4 & hypertree ($68$-bit tree index) \\
-$SIG$ & 49992 B & $R(32) \,\|\, \mathrm{FORS}_{\times 35} \,\|\,
-\mathrm{layers}_{\times 17}$ \\
-$SIG_{pk}/SIG_{sk}$ & 64 / 128 B & DS public/secret keys \\
+$n$ & 256 & ring degree \\
+$k$ & 4 & module rank; dimension 1024 \\
+$q$ & $2^{12}=4096$ & modulus \\
+$\eta$ & 2 & $\CBD(2)$ for $s,e,r,e_1,e_2$ \\
+$m$ & 32 bytes & FO message; one bit per coefficient \\
+$pk$ & 1568 bytes & $\mathit{seed}_A(32)\concat\Pack_{12}(b)(1536)$ \\
+$ct$ & 1440 bytes & $\Pack_{10}(c_1)(1280)\concat\Pack_5(c_2)(160)$ \\
+$sk$ & 1632 bytes & $\mathit{seed}(32)\concat\mathit{fake}(32)\concat pk$ \\
+$ss$ & 32 bytes & XOF output \\
 \bottomrule
 \end{tabular}
-\end{center}
+\caption{KEM parameters and sizes.}
+\label{tab:kemparams}
+\end{table}
 
-%======================================================================
-\section{Core primitives}
+\subsection{Matrix and vector expansion}
 
-\begin{defn}[CA-PRF]
-$\mathrm{CAExpand}(\mathit{seed}, \mathit{domain}, L)$: 256-byte state
-from $\mathrm{XOF}(\mathit{seed} \,\|\, \mathit{domain} \,\|\,
-\text{``-init''})$, evolved through 32 branchless cellular-automaton
-rounds under a seed-derived rule, emitted as
-$\mathrm{KDF}(\mathit{state} \,\|\, \mathit{domain} \,\|\,
-\text{``-out''})[0..L]$.  Deterministic in its inputs.
-\end{defn}
+\begin{definition}[ParseMatrix]
+The CA-PRF output of length $4\cdot4\cdot384=6144$ bytes is read in
+row-major order.  Entry $(i,j)$ is the 384-byte block at offset
+$(4i+j)\cdot384$, interpreted as 256 12-bit coefficients by
+$\Unpack_{12}$.
+\end{definition}
 
-\begin{defn}[Hashing]
-BLAKE3 as specified by its designers: $\mathrm{H}_{32}$ (32 B),
-$\mathrm{XOF}$ (arbitrary length; first 32 output bytes equal
-$\mathrm{H}_{32}$), keyed hashing, and the reference
-\texttt{derive\_key} construction.  No HypG modification exists.
-\end{defn}
+\begin{definition}[ParseCBDVector]
+A 512-byte CA-PRF output is split into four 128-byte blocks; each block
+is mapped through $\CBD(2)$ to one polynomial.
+\end{definition}
 
-\begin{defn}[Stream cipher]
-IETF ChaCha20 (RFC~8439 \S2): 32 B key, 12 B nonce, 32-bit block
-counter from 0, 64 B blocks.  Total input per $(\mathit{key},
-\mathit{nonce})$ is bounded by $2^{32}$ blocks ($2^{38}$ B); counter
-exhaustion fails closed and never wraps.
-\end{defn}
+\subsection{Key generation}
 
-%======================================================================
-\section{KEM}
+\begin{steps}{Algorithm 1: $\KeyGen(\mathit{seed})$}
+\item Input: a 32-byte seed with at least 256 bits of entropy.
+\item $\mathit{seed}_A\gets\mathrm{CA\text{-}PRF}(\mathit{seed},
+  \texttt{"HYP-G/v07/seed-a"},32)$.
+\item $A\gets\mathrm{ParseMatrix}(
+  \mathrm{CA\text{-}PRF}(\mathit{seed}_A,
+  \texttt{"HYP-G/v07/poly-a"},6144))$.
+\item $s\gets\mathrm{ParseCBDVector}(
+  \mathrm{CA\text{-}PRF}(\mathit{seed},
+  \texttt{"HYP-G/v07/sec-s"},512))$.
+\item $e\gets\mathrm{ParseCBDVector}(
+  \mathrm{CA\text{-}PRF}(\mathit{seed},
+  \texttt{"HYP-G/v07/sec-e"},512))$.
+\item For $i=0,\ldots,3$: $b_i\gets
+  \sum_{j=0}^{3}A_{i,j}*s_j+e_i$ in $\Ring$.
+\item $pk\gets\mathit{seed}_A\concat\Pack_{12}(b_0)\concat\cdots
+  \concat\Pack_{12}(b_3)$.
+\item $\mathit{fake}\gets\mathrm{CA\text{-}PRF}(\mathit{seed},
+  \texttt{"HYP-G/v07/fake"},32)$.
+\item $sk\gets\mathit{seed}\concat\mathit{fake}\concat pk$.
+\item Return $(pk,sk)$.  Best-effort erase intermediate secret buffers.
+\end{steps}
 
-\begin{defn}[KeyGen]
-On $\mathit{seed} \in \{0,1\}^{256}$:
-$\mathit{seed}_A \gets \mathrm{CAExpand}(\mathit{seed},
-\text{seed-a})$;
-$A \gets \mathrm{Uniform}(\mathit{seed}_A)^{4 \times 4}$;
-$s, e \gets \mathrm{CBD}_2$ via \texttt{CA-PRF};
-$b \gets A s + e$;
-$pk \gets \mathit{seed}_A \,\|\, \mathrm{pack}_{12}(b)$;
-$\mathit{fake} \gets \mathrm{CAExpand}(\mathit{seed}, \text{fake})$;
-$sk \gets \mathit{seed} \,\|\, \mathit{fake} \,\|\, pk$.
-\end{defn}
+\subsection{Encapsulation}
 
-\begin{defn}[Encaps]
-On $(pk, m)$, $m \in \{0,1\}^{256}$ caller coins:
-$(r, e_1, e_2) \gets G(m, pk)$ (FO oracle via \texttt{CA-PRF});
-$c_1 \gets A^T r + e_1$, $c_2 \gets b^T r + e_2 + \mathrm{Encode}(m)$
-(1 bit/coefficient, spacing 2048);
-$ct \gets \mathrm{pack}_{10}(c_1) \,\|\, \mathrm{pack}_{5}(c_2)$;
-$ss \gets \mathrm{KDF}(m \,\|\, ct \,\|\, \mathrm{H}(pk))$.
-\end{defn}
+\begin{steps}{Algorithm 2: $\Encaps(pk,m)$}
+\item Input: a 1568-byte public key and a 32-byte FO message $m$.
+  The caller MUST supply a fresh CSPRNG output for $m$ on every call.
+\item Parse $pk$ as $(\mathit{seed}_A,b_0,\ldots,b_3)$.
+\item $A\gets\mathrm{ParseMatrix}(
+  \mathrm{CA\text{-}PRF}(\mathit{seed}_A,
+  \texttt{"HYP-G/v07/poly-a"},6144))$.
+\item $\mathit{rseed}\gets
+  \Hash(m\concat pk\concat\texttt{"HYP-G/v07/r-seed"})$.
+\item $r\gets\mathrm{ParseCBDVector}(
+  \mathrm{CA\text{-}PRF}(\mathit{rseed},
+  \texttt{"HYP-G/v07/rand-r"},512))$.
+\item $e_1\gets\mathrm{ParseCBDVector}(
+  \mathrm{CA\text{-}PRF}(\mathit{rseed},
+  \texttt{"HYP-G/v07/rand-e1"},512))$.
+\item $e_2\gets\CBD(\mathrm{CA\text{-}PRF}(\mathit{rseed},
+  \texttt{"HYP-G/v07/rand-e2"},128))$.
+\item For $i=0,\ldots,3$: $c_{1,i}\gets
+  \sum_{j=0}^{3}A_{j,i}*r_j+e_{1,i}$.
+\item $c_2\gets\sum_{i=0}^{3}b_i*r_i+e_2+\Encode(m)$.
+\item $ct\gets\Pack_{10}(\Compress_{10}(c_{1,0}))\concat\cdots
+  \concat\Pack_{10}(\Compress_{10}(c_{1,3}))
+  \concat\Pack_5(\Compress_5(c_2))$.
+\item $ss\gets\XOF(\texttt{"HYP-G/v07/ss"}\concat m\concat ct
+  \concat\Hash(pk),32)$.
+\item Return $(ct,ss)$.
+\end{steps}
 
-\begin{defn}[Decaps]
-Decrypt $v = c_2 - s^T c_1$, decode to $m'$; re-encrypt to $ct'$;
-$ok \gets [ct' = ct]$; return
-$\mathrm{ct\_select}(ok, ss(m'), ss_{\mathrm{rej}}(\mathit{fake}, ct))$.
-Never fails; wrong $ct$ yields the pseudorandom reject secret.
-\end{defn}
+\subsection{Decapsulation}
 
-\paragraph{Failure analysis.}
-Decode threshold $\pm 1024$ against noise of standard deviation
-$\sim$60: analytic margin $\approx$ $16\sigma$.  Empirically
-20000/20000 clean round-trips.  The 32-trial unit test is a tripwire,
-not the argument.
+\begin{steps}{Algorithm 3: $\Decaps(sk,ct)$}
+\item Parse $sk$ as $(\mathit{seed},\mathit{fake},pk)$.
+\item Parse $pk$ and expand $A$ as in encapsulation.
+\item $s\gets\mathrm{ParseCBDVector}(
+  \mathrm{CA\text{-}PRF}(\mathit{seed},
+  \texttt{"HYP-G/v07/sec-s"},512))$.
+\item Unpack and decompress $ct$ into $(c_1,c_2)$.
+\item $v\gets c_2-\sum_{i=0}^{3}s_i*c_{1,i}$.
+\item $m'\gets\Decode(v)$.
+\item Recompute $ct'$ exactly as in Algorithm~2 from $(pk,m')$.
+\item $\mathit{ok}\gets\mathrm{ct\_eq}(ct',ct)$ (full scan, returns
+  $1$ on equality and $0$ otherwise).
+\item $\mathit{pk\_hash}\gets\Hash(pk)$.
+\item $ss_{\mathrm{ok}}\gets\XOF(
+  \texttt{"HYP-G/v07/ss"}\concat m'\concat ct
+  \concat\mathit{pk\_hash},32)$.
+\item $ss_{\mathrm{rej}}\gets\XOF(
+  \texttt{"HYP-G/v07/reject"}\concat\mathit{fake}\concat ct,32)$.
+\item $ss\gets\mathrm{ct\_select}(\mathit{ok},ss_{\mathrm{ok}},
+  ss_{\mathrm{rej}})$.
+\item Return $ss$.  The function never returns an error.
+\end{steps}
 
-%======================================================================
-\section{Hash API}
+\subsection{Wire layout}
 
-$\mathrm{hash32}$ / $\mathrm{hash64}$ (XOF-64, first half equals
-$\mathrm{hash32}$), $\mathrm{keyed32}$, $\mathrm{derive32}$,
-$\mathrm{expand}$ ($\mathrm{XOF}(\mathit{seed} \,\|\, \mathit{domain})$),
-$\mathrm{kdf}$ ($\mathrm{XOF}(\mathit{domain} \,\|\, \mathrm{parts})$),
-and a streaming hasher proven equal to one-shot at every split pattern.
-All lengths are public.
-
-%======================================================================
-\section{AEAD}
-
-\begin{defn}[One-shot seal/open]
-Subkeys $(k_e, k_m) \gets (\mathrm{derive}(\text{symm-enc}),
-\mathrm{derive}(\text{symm-mac}))$ from the 32 B master key.
-$ct \gets \mathrm{ChaCha}(k_e, \mathit{nonce}, 0, pt)$ (in place,
-$|ct| = |pt|$);
-$tag \gets \mathrm{KeyedBLAKE3}(k_m, \mathit{nonce} \,\|\, ad \,\|\,
-ct \,\|\, \mathrm{le64}(|ad|) \,\|\, \mathrm{le64}(|ct|))$.
-Open recomputes and full-scan compares the tag \emph{before}
-decrypting; mismatch (or length mismatch) returns $\bot$ leaving $pt$
-untouched (streaming: zeroized).
-\end{defn}
-
-\begin{prop}[Streaming identity]
-For every chunking of the same $(\mathit{key}, \mathit{nonce}, ad,
-\mathit{message})$, the streaming sealer emits the identical
-$(ct, tag)$ as one-shot seal: subkeys, MAC input order, and the
-ChaCha counter sequence (with cross-chunk partial-block buffering)
-coincide byte-for-byte.  Tested across adversarial chunkings
-including empty chunks (unit) and 20 PRNG split shapes plus 1\,MiB
-(redteam S14).
-\end{prop}
-
-Opener plaintext is \emph{tentative} until \texttt{finish} validates
-the tag (EtM consequence); validity holds only after \texttt{Some}.
-
-%======================================================================
-\section{Signatures}
-
-Hedged $R \gets \mathrm{PRF}(sk.\mathrm{prf}, m)$;
-$md \gets \mathrm{H}(R \,\|\, \mathit{pubseed} \,\|\, \mathit{root} \,\|\, m)$
-(64 B, streamed, counter-bound); split into 35 $\times$ 9-bit FORS
-indices, 68-bit tree index, 4-bit leaf.  FORS signs per-tree leaves;
-the hypertree climbs 17 XMSS layers (WOTS+ sign + auth path each);
-serialization is $R \,\|\, \mathrm{FORS}_{\times 35} \,\|\,
-\mathrm{layers}_{\times 17}$ with zeroed 8-byte reserved pads per
-layer, rejection-checked at verify.  Verify returns false on any
-malformation (length first).  Composition bounds are cited in
-\texttt{docs/spec-ds.md} \S6 (closed-form FORS/WOTS+/XMSS reductions);
-auditor must confirm on these exact numbers.
-
-%======================================================================
-\section{Domain registry (frozen)}
-
-\begin{center}
+\begin{table}[t]
+\centering
 \small
-\begin{tabular}{ll}
+\begin{tabular}{@{}rrl@{}}
 \toprule
-Domain (\texttt{HYP-G/v07/} prefix) & Purpose \\
+Offset & Length & Field in $pk$ \\
 \midrule
-\texttt{seed-a} & KEM $\mathit{seed}_A$ \\
-\texttt{sec-s}, \texttt{sec-e} & KEM secret / error vectors \\
-\texttt{poly-a} & KEM matrix $A$ \\
-\texttt{rand-r}, \texttt{rand-e1}, \texttt{rand-e2} & FO randomness $G$ \\
-\texttt{fake} & implicit-rejection key \\
-\texttt{r-seed} & FO randomness seed \\
-\texttt{ss}, \texttt{reject} & shared-secret / rejection KDFs \\
-\texttt{symm-enc}, \texttt{symm-mac} & AEAD subkeys \\
-\texttt{ds-pubseed}, \texttt{ds-prf}, \texttt{ds-addrnd}, \texttt{ds-msghash} & DS derivations \\
-\texttt{kat} & hash-KAT sample only (never protocol use) \\
+0 & 32 & $\mathit{seed}_A$ \\
+32 & 384 & packed $b_0$ \\
+416 & 384 & packed $b_1$ \\
+800 & 384 & packed $b_2$ \\
+1184 & 384 & packed $b_3$ \\
 \bottomrule
 \end{tabular}
-\end{center}
-Frozen rows are never edited; new domains require registry rows.
-\texttt{CA-PRF} \texttt{-init}/\texttt{-out} suffixes are mechanism,
-not registry.
+\hfill
+\begin{tabular}{@{}rrl@{}}
+\toprule
+Offset & Length & Field in $ct$ \\
+\midrule
+0 & 320 & packed compressed $c_{1,0}$ \\
+320 & 320 & packed compressed $c_{1,1}$ \\
+640 & 320 & packed compressed $c_{1,2}$ \\
+960 & 320 & packed compressed $c_{1,3}$ \\
+1280 & 160 & packed compressed $c_2$ \\
+\bottomrule
+\end{tabular}
+\caption{KEM public-key and ciphertext layouts.  The secret key is
+$\mathit{seed}(32)\concat\mathit{fake}(32)\concat pk(1568)$.}
+\label{tab:kemwire}
+\end{table}
+
+\subsection{Correctness lemmas}
+
+\begin{lemma}[KEM noise identity]
+\label{lem:kem-noise}
+For a ciphertext produced by Algorithm~2 and unpacked by Algorithm~3,
+before compression effects,
+\[
+ c_2-\langle s,c_1\rangle
+ =\Encode(m)+\langle e,r\rangle+e_2-\langle s,e_1\rangle.
+\]
+\end{lemma}
+
+\begin{proof}
+Expand $b=A s+e$ and $c_1=A^T r+e_1$, then use associativity and
+commutativity of multiplication in $\Ring$.  The mixed terms
+$\langle A s,r\rangle$ and $\langle s,A^T r\rangle$ are the same sum
+over the same index pairs.
+\end{proof}
+
+\begin{lemma}[Compression residual identity]
+\label{lem:kem-residual}
+Let $\Delta_{1,i}$ be the residual on $c_{1,i}$ and $\Delta_2$ the
+residual on $c_2$.  Then
+\[
+ v'=\Encode(m)+\langle e,r\rangle+e_2-\langle s,e_1\rangle
+ +\Delta_2-\langle s,\Delta_1\rangle.
+\]
+\end{lemma}
+
+\begin{proof}
+Substitute $c_{1,i}'=c_{1,i}+\Delta_{1,i}$ and
+$c_2'=c_2+\Delta_2$ into $v'=c_2'-\langle s,c_1'\rangle$ and apply
+Lemma~\ref{lem:kem-noise}.
+\end{proof}
+
+\begin{lemma}[Deterministic re-encryption]
+\label{lem:kem-reenc}
+If $\Decode(v')=m$, then Algorithm~3 recomputes $ct'=ct$ and selects
+$ss_{\mathrm{ok}}$.
+\end{lemma}
+
+\begin{proof}
+The expansions, PKE encryption, compression, and packing are
+deterministic functions of their inputs.  With $m'=m$, every
+intermediate value equals the encapsulation value, including the
+fixed-length packed ciphertext.  The equality test therefore returns
+$1$.
+\end{proof}
+
+\paragraph{Failure probability.}
+The working variance model is
+\[
+ \mathrm{Var}[\langle e,r\rangle]=1024,\quad
+ \mathrm{Var}[\langle s,e_1\rangle]=1024,\quad
+ \mathrm{Var}[e_2]=1,
+\]
+\[
+ \mathrm{Var}[\langle s,\Delta_1\rangle]=1280,\quad
+ \mathrm{Var}[\Delta_2]=1365.25,
+\]
+for a total of $4694.25$ and $\sigma\approx68.5$.  Rounding up to
+$\sigma\approx70$ gives a working margin of approximately
+$14.6\sigma$ against the 1024 decision boundary.  This is a heuristic,
+not a formal tail bound.  No analytic $2^{-128}$ failure bound is
+claimed, and the 32-trial unit test is a regression tripwire.
+
+\subsection{Caller semantics}
+
+The 32-byte \texttt{coins} argument of the API is $m$, not a
+domain-separated auxiliary nonce.  It is embedded in $c_2$ and is the
+input to the FO randomness generator.  It MUST be fresh and uniformly
+random for every encapsulation under a given public key.  The KEM has
+no internal RNG; key generation, encapsulation, and decapsulation are
+pure deterministic functions of their inputs.
+
+\subsection{Malformed inputs}
+
+The public-key and ciphertext parsers are infallible fixed-size
+wrappers.  They do not validate that a public key was produced by
+Algorithm~1, and they do not reject non-canonical algebraic structure
+beyond unpacking 12-bit fields.  A malformed but correctly sized input
+cannot cause an out-of-bounds access in safe Rust; decapsulation is
+total.  It can of course produce a useless shared secret.
+
+%======================================================================
+\section{AEAD specification}
+\label{sec:aead}
+
+\subsection{Parameters}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+Parameter & Value \\
+\midrule
+Master key & 32 bytes \\
+Encryption subkey & 32 bytes \\
+MAC subkey & 32 bytes \\
+Nonce & 12 bytes \\
+Tag & 32 bytes \\
+ChaCha20 block & 64 bytes, 20 rounds \\
+Counter & 32 bits, initial 0 \\
+Maximum message & $2^{38}$ bytes ($2^{32}$ blocks) \\
+\bottomrule
+\end{tabular}
+\caption{AEAD parameters.}
+\label{tab:aeadparams}
+\end{table}
+
+\subsection{Key schedule}
+
+\[
+ k_e=\mathrm{derive}(\texttt{"HYP-G/v07/symm-enc"},K),\qquad
+ k_m=\mathrm{derive}(\texttt{"HYP-G/v07/symm-mac"},K).
+\]
+ChaCha20 is the IETF 20-round ARX stream cipher of RFC~8439~\cite{rfc8439}.  The master key is not used directly for ChaCha20 or for the MAC.
+
+\subsection{One-shot sealing and opening}
+
+\begin{steps}{Algorithm 4: $\mathrm{Seal}(K,N,AD,M)$}
+\item Require $|C|=|M|$ and $|M|\le2^{38}$; otherwise erase $C$ and
+  $T$ and return $\bot$.
+\item $(k_e,k_m)\gets$ key schedule.
+\item $C\gets M$; apply ChaCha20 with key $k_e$, nonce $N$, and
+  counter $0$.
+\item $T\gets\mathrm{KeyedBLAKE3}(k_m,
+  N\concat AD\concat C\concat\mathrm{LE}_{64}(|AD|)
+  \concat\mathrm{LE}_{64}(|C|))$.
+\item Return $(C,T)$.
+\end{steps}
+
+\begin{steps}{Algorithm 5: $\mathrm{Open}(K,N,AD,C,T)$}
+\item Require $|P|=|C|$ and $|C|\le2^{38}$; otherwise return $\bot$.
+\item $(k_e,k_m)\gets$ key schedule.
+\item $T'\gets\mathrm{KeyedBLAKE3}(k_m,
+  N\concat AD\concat C\concat\mathrm{LE}_{64}(|AD|)
+  \concat\mathrm{LE}_{64}(|C|))$.
+\item If $\mathrm{ct\_eq}(T',T)\ne1$, return $\bot$ without writing
+  $P$.
+\item $P\gets C$; apply ChaCha20 with key $k_e$, nonce $N$, and
+  counter $0$.
+\item Return $P$.
+\end{steps}
+
+The length suffix is mandatory even when $AD$ or $C$ is empty.  The
+tag covers the ciphertext, not the plaintext.
+
+\subsection{Streaming state machine}
+
+\texttt{StreamSealer} and \texttt{StreamOpener} maintain: a 64-byte
+keystream block, a partial-block offset, a 64-bit next-counter value, a
+running keyed-BLAKE3 state, the AD length, the ciphertext length, and a
+failure flag.  \texttt{new} absorbs $N\concat AD$.  Sealer
+\texttt{update} copies plaintext, XORs the next keystream bytes, adds
+the chunk length using checked addition, and absorbs the ciphertext.
+Opener \texttt{update} copies ciphertext, XORs tentatively, adds the
+length, and absorbs the ciphertext.
+
+\begin{proposition}[Streaming identity]
+For every chunking of the same $(K,N,AD,M)$, the streaming sealer emits
+the same $(C,T)$ as Algorithm~4.  For every chunking of the same
+$(K,N,AD,C)$, the streaming opener accepts exactly when Algorithm~5
+accepts and returns the same plaintext.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+The subkeys, initial MAC state, and length counters are identical.  The
+keystream state preserves the exact 64-byte block and offset across
+calls; by induction on the chunk sequence, the concatenated XOR bytes
+equal the one-shot ChaCha20 keystream with counters $0,1,\ldots$.  The
+running MAC absorbs exactly $N\concat AD\concat C$ and then the two
+length suffixes.  The opener performs the same operations, with the
+additional invariant that tentative plaintext is zeroized on failure.
+\end{proof}
+
+\subsection{Failure rules}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Condition & Sealer & Opener \\
+\midrule
+length mismatch & erase chunk, poison, $\bot$ & erase chunk, poison, $\bot$ \\
+counter exhausted & erase chunk, poison, $\bot$ & erase chunk, poison, $\bot$ \\
+length overflow & erase chunk, poison, $\bot$ & erase chunk, poison, $\bot$ \\
+finish after poison & erase tag, $\bot$ & erase plaintext, $\bot$ \\
+finish length mismatch & --- & erase plaintext, $\bot$ \\
+tag mismatch & --- & erase plaintext, $\bot$ \\
+success & write tag, $\top$ & validate, $\top$ \\
+\bottomrule
+\end{tabular}
+\caption{Streaming AEAD failure rules.  $\top$ denotes \texttt{Some(())}
+and $\bot$ denotes \texttt{None}.}
+\label{tab:aeadfail}
+\end{table}
+
+A poisoned stream never recovers.  The opener's plaintext is tentative
+until \texttt{finish} returns $\top$; callers MUST NOT parse, display,
+execute, or transmit it before that point.
+
+%======================================================================
+\section{Signature specification}
+\label{sec:ds}
+
+\subsection{Parameters and sizes}
+
+The construction follows the SPHINCS+/SLH-DSA family~\cite{sphincs,fips205};
+XMSS is standardised in RFC~8391~\cite{rfc8391}.  HypG is not
+wire-compatible with either standard.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+Symbol & Value \\
+\midrule
+$n$ & 32 bytes (BLAKE3-256) \\
+$h$ & 68 \\
+$d$ & 17 layers \\
+$h'$ & 4 (16 leaves per XMSS tree) \\
+$k_{\mathrm{FORS}}$ & 35 \\
+$a$ & 9 (512 FORS leaves per tree) \\
+$w$ & 16 \\
+$\ell$ & 67 (64 message + 3 checksum digits) \\
+$pk_{\mathrm{sig}}$ & 64 bytes \\
+$sk_{\mathrm{sig}}$ & 128 bytes \\
+$\mathit{sig}$ & 49,992 bytes \\
+\bottomrule
+\end{tabular}
+\caption{Signature parameters.}
+\label{tab:dsparams}
+\end{table}
+
+The sizes are:
+\[
+\begin{aligned}
+ \mathrm{FORS\ unit} &= 32+9\cdot32=320,\\
+ \mathrm{FORS\ total} &= 35\cdot320=11{,}200,\\
+ \mathrm{XMSS\ layer} &= 8+67\cdot32+4\cdot32=2{,}280,\\
+ \mathrm{hypertree} &= 17\cdot2{,}280=38{,}760,\\
+ \mathit{sig} &= 32+11{,}200+38{,}760=49{,}992.
+\end{aligned}
+\]
+
+\subsection{Address structure}
+
+\begin{definition}[ADRS]
+An address is 32 bytes:
+\[
+ \mathrm{layer}(4)\concat\mathrm{tree}(12)\concat
+ \mathrm{type}(4)\concat f_{20}(4)\concat f_{24}(4)\concat f_{28}(4),
+\]
+all integers little-endian.  The 12-byte tree field holds a 96-bit
+integer; valid hypertree addresses use at most 68 bits and zero the high
+28 bits.
+\end{definition}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}cllll@{}}
+\toprule
+Type & Name & $f_{20}$ & $f_{24}$ & $f_{28}$ \\
+\midrule
+0 & \texttt{T\_FORS} & FORS tree & FORS leaf & zero \\
+1 & \texttt{T\_WOTS\_HASH} & keypair & chain & absolute step \\
+2 & \texttt{T\_WOTS\_PK} & keypair & L-tree height & pair index \\
+3 & \texttt{T\_TREE} & FORS tree or zero & node height & node index \\
+4 & \texttt{T\_ROOT} & defined, unused & defined, unused & defined, unused \\
+\bottomrule
+\end{tabular}
+\caption{Address types and field assignments.}
+\label{tab:adrs}
+\end{table}
+
+\subsection{Tweakable hash functions}
+
+All three functions use keyed BLAKE3-256 with the public seed
+$\mathit{pubseed}$ as the 32-byte key:
+\[
+\begin{aligned}
+ \PRF(\mathit{pubseed},x,A)
+   &=\mathrm{KeyedBLAKE3}(\mathit{pubseed},
+     01\concat x\concat A),\\
+ F(\mathit{pubseed},A,x)
+   &=\mathrm{KeyedBLAKE3}(\mathit{pubseed},
+     02\concat A\concat x),\\
+ \Hash(\mathit{pubseed},A,L,R)
+   &=\mathrm{KeyedBLAKE3}(\mathit{pubseed},
+     A\concat L\concat R).
+\end{aligned}
+\]
+The first two inputs are 65 bytes; the third is 96 bytes.  The tags
+$01$ and $02$ are the DS 2.0.1 revision.  $\Hash$ is untagged but its
+arity and field order are distinct.
+
+\subsection{Key generation}
+
+\begin{steps}{Algorithm 6: $\mathrm{DS.KeyGen}(\mathit{esk})$}
+\item $\mathit{pubseed}\gets\mathrm{CA\text{-}PRF}(\mathit{esk},
+  \texttt{"HYP-G/v07/ds-pubseed"},32)$.
+\item $\mathit{prf}\gets\mathrm{CA\text{-}PRF}(\mathit{esk},
+  \texttt{"HYP-G/v07/ds-prf"},32)$.
+\item $\mathit{root}\gets\mathrm{HT.Root}(\mathit{pubseed},
+  \mathit{esk})$, the top XMSS layer at layer 16, tree 0.
+\item $pk\gets\mathit{root}\concat\mathit{pubseed}$.
+\item $sk\gets\mathit{esk}\concat\mathit{prf}\concat
+  \mathit{pubseed}\concat\mathit{root}$.
+\item Return $(pk,sk)$.
+\end{steps}
+
+\subsection{Randomizer, digest, and split}
+
+\begin{steps}{Algorithm 7: $\mathrm{PreSign}(sk,\mathit{msg})$}
+\item Parse $(\mathit{esk},\mathit{prf},\mathit{pubseed},
+  \mathit{root})$ from $sk$.
+\item $\mathit{stream}\gets\mathrm{CA\text{-}PRF}(\mathit{prf},
+  \texttt{"HYP-G/v07/ds-addrnd"},64)$.
+\item $R\gets\Hash(\mathit{stream}\concat\Hash(\mathit{msg}))$.
+\item Compute, for $c\in\{0,1\}$,
+  \[
+   md_c=\Hash(R\concat\mathit{pubseed}\concat\mathit{root}
+   \concat\Hash(\mathit{msg})\concat\mathrm{LE}_{32}(c)
+   \concat\texttt{"HYP-G/v07/ds-msghash"}).
+  \]
+\item Split the first 387 bits of $md=md_0\concat md_1$:
+  \[
+   \mathit{fors}_t=\sum_{b=0}^{8}2^b\cdot
+   \mathrm{bit}(md,9t+b),\quad t=0,\ldots,34,
+  \]
+  \[
+   \mathit{tree}=\sum_{b=0}^{67}2^b\cdot
+   \mathrm{bit}(md,315+b),\qquad
+   \mathit{leaf}=\sum_{b=0}^{3}2^b\cdot
+   \mathrm{bit}(md,383+b).
+  \]
+\item Return $(R,\mathit{fors},\mathit{tree},\mathit{leaf},
+  \mathit{esk},\mathit{pubseed})$.
+\end{steps}
+
+\subsection{FORS}
+
+\begin{definition}[FORS leaf and node]
+For tree $t$ and leaf $l$:
+\[
+ A=\mathrm{ADRS}(0,0,0,t,l,0),\qquad
+ \mathit{leaf}(t,l)=\PRF(\mathit{pubseed},\mathit{esk},A).
+\]
+For a node at height $h$ and pair index $p$:
+\[
+ A=\mathrm{ADRS}(0,0,3,t,h,p),\qquad
+ \mathit{node}=\Hash(\mathit{pubseed},A,L,R).
+\]
+\end{definition}
+
+The FORS public key is
+\[
+ \mathrm{FORS.PK}=\mathrm{KeyedBLAKE3}(\mathit{pubseed},
+ A_{\mathrm{root}}\concat\mathit{root}_0\concat\cdots
+ \concat\mathit{root}_{34}),
+\]
+where $A_{\mathrm{root}}=\mathrm{ADRS}(0,0,0,0xFFFFFFFF,0,0)$ and
+$\mathit{root}_t$ is the root of tree $t$.  The input is 1152 bytes.
+
+The signature for tree $t$ is the selected leaf plus its nine
+authentication nodes.  Verification recomputes each root from the leaf
+and path, then compresses the 35 roots.  An out-of-range selector
+returns an all-zero unit; a real root cannot equal that output except
+with negligible probability.
+
+\begin{lemma}[FORS reconstruction]
+\label{lem:fors}
+Given a valid FORS signature for indices $\mathit{fors}$ and public
+seed $\mathit{pubseed}$, $\mathrm{FORS.Verify}$ returns the same
+$\mathrm{FORS.PK}$ as $\mathrm{FORS.PK}$ generation.
+\end{lemma}
+
+\begin{proof}
+At height $h$, the verifier uses the current node index
+$\lfloor\mathit{fors}_t/2^h\rfloor$, its sibling, and the address
+$(t,h,\lfloor\mathit{fors}_t/2^{h+1}\rfloor)$.  The signer stored
+exactly that sibling and the same address.  Induction on $h$ therefore
+reconstructs each tree root.  Compression is deterministic.
+\end{proof}
+
+\subsection{WOTS+}
+
+\begin{definition}[Digits]
+For a 32-byte message:
+\[
+ d_i=(msg_{\lfloor i/2\rfloor}\gg4(i\bmod2))\land0x0F,
+ \quad i=0,\ldots,63.
+\]
+The checksum is
+\[
+ c=\sum_{i=0}^{63}(15-d_i),
+\]
+encoded as three base-16 digits most-significant first:
+$d_{64}=(c\gg8)\land0x0F$,
+$d_{65}=(c\gg4)\land0x0F$,
+$d_{66}=c\land0x0F$.
+\end{definition}
+
+\begin{definition}[Chain]
+For a base address with layer, tree, and keypair index, and chain
+index $i$:
+\[
+ \mathit{sk}_i=\PRF(\mathit{pubseed},\mathit{esk},
+ \mathrm{ADRS}(\mathit{layer},\mathit{tree},1,i,0,0)).
+\]
+For a segment $[start,start+steps)$:
+\[
+ \mathrm{Chain}(x;start,steps,A)=
+ F^{\,start+steps-1}_{A,\ldots}\circ\cdots\circ
+ F^{\,start}_{A}(x),
+\]
+where each $F$ call uses address $A$ with $f_{24}=i$ and
+$f_{28}=start+s$.  The implementation executes all 15 steps and
+selects branchlessly.
+\end{definition}
+
+\begin{lemma}[WOTS chain compatibility]
+\label{lem:wots-chain}
+For $0\le d\le15$,
+\[
+ \mathrm{Chain}(\mathrm{Chain}(x;0,d,A);d,15-d,A)
+ =\mathrm{Chain}(x;0,15,A).
+\]
+\end{lemma}
+
+\begin{proof}
+Both sides apply the same 15 chain steps with absolute addresses
+$0,\ldots,14$; composition of functions is associative and the
+intermediate segment boundary at $d$ does not change the addresses or
+inputs.
+\end{proof}
+
+The L-tree compresses 67 chain ends.  At height $h$ and pair index $p$:
+\[
+ A=\mathrm{ADRS}(\mathit{layer},\mathit{tree},2,
+ \mathit{keypair},h,p),\qquad
+ \mathit{next}_p=\Hash(\mathit{pubseed},A,L,R).
+\]
+If the width is odd, the final unpaired node is promoted unchanged.
+The widths are $67,34,17,9,5,3,2,1$.
+
+\begin{lemma}[L-tree determinism]
+\label{lem:ltree}
+The L-tree output is a deterministic function of the 67 chain ends and
+the base address.
+\end{lemma}
+
+\begin{proof}
+Each level is a deterministic pairwise map plus a deterministic
+promotion rule; induction on the width gives the claim.
+\end{proof}
+
+\subsection{XMSS}
+
+An XMSS layer has 16 leaves.  For keypair $i$:
+\[
+ \begin{aligned}
+ \mathit{base}&=\mathrm{ADRS}(\mathit{layer},\mathit{tree},0,i,0,0),\\
+ \mathit{sk}&=\mathrm{WOTS.GenSK}(\mathit{pubseed},\mathit{esk},
+   \mathit{base}),\\
+ \mathit{pk}&=\mathrm{WOTS.PKFromSK}(\mathit{pubseed},\mathit{sk},
+   \mathit{base}),\\
+ \mathit{leaf}&=\mathrm{WOTS.LTree}(\mathit{pubseed},\mathit{pk},
+   \mathit{base}).
+ \end{aligned}
+\]
+The Merkle root at height $h$ and node index $p$ uses
+\[
+ A=\mathrm{ADRS}(\mathit{layer},\mathit{tree},3,0,h,p),
+ \qquad
+ \mathit{node}=\Hash(\mathit{pubseed},A,L,R).
+\]
+The XMSS signature is a WOTS+ signature plus four authentication
+nodes.  Verification recomputes the leaf and climbs with the same
+parity rule: if the current index is even, the computed node is the left
+child; otherwise it is the right child.
+
+\begin{lemma}[XMSS reconstruction]
+\label{lem:xmss}
+For a valid XMSS signature, verification returns the same root as
+XMSS public-key generation.
+\end{lemma}
+
+\begin{proof}
+The WOTS+ signature reconstructs the selected leaf by
+Lemma~\ref{lem:wots-chain}, and the authentication path supplies the sibling at every
+height.  Induction on height, with the address and parity rules above,
+reconstructs the Merkle root.
+\end{proof}
+
+\subsection{Hypertree}
+
+For layer $i=0,\ldots,16$:
+\[
+ \mathit{tree}_i=\mathit{tree\_idx}\gg4(i+1),\qquad
+ \mathit{leaf}_0=\mathit{leaf},\qquad
+ \mathit{leaf}_i=(\mathit{tree\_idx}\gg4i)\land15
+ \quad(i\ge1).
+\]
+Layer 0 signs the FORS public key; each higher layer signs the root
+returned by the layer below.  `HT.Root` is the XMSS root of layer 16,
+tree 0.
+
+\begin{lemma}[Hypertree consistency]
+\label{lem:ht}
+For an honestly generated key and signature, hypertree verification
+returns `HT.Root`.
+\end{lemma}
+
+\begin{proof}
+Induction on the layer index.  The base message is the FORS public key.
+At layer $i$, XMSS reconstruction gives the next message; after layer
+16 the message is the top root, which equals the public-key root by
+construction.
+\end{proof}
+
+\subsection{Signing and verification}
+
+\begin{steps}{Algorithm 8: $\mathrm{DS.Sign}(sk,msg)$}
+\item $(R,\mathit{fors},\mathit{tree},\mathit{leaf},esk,pubseed)
+  \gets\mathrm{PreSign}(sk,msg)$.
+\item Compute the 35 FORS units by signing each $(\mathit{fors}_t)$.
+\item Compute the FORS public key from the units (or from the secret).
+\item $m_0\gets\mathrm{FORS.PK}$.
+\item For $i=0,\ldots,16$:
+  \begin{enumerate}[label=\alph*)]
+  \item $s_i\gets\mathrm{XMSS.Sign}(\mathit{pubseed},esk,i,
+    \mathit{tree}_i,\mathit{leaf}_i,m_i)$.
+  \item $m_{i+1}\gets\mathrm{XMSS.Verify}(\mathit{pubseed},i,
+    \mathit{tree}_i,\mathit{leaf}_i,m_i,s_i)$.
+  \end{enumerate}
+\item Serialize $R$, the 35 FORS units, and the 17 layer signatures,
+  inserting eight zero bytes before each layer's WOTS+ signature.
+\item Return the 49,992-byte signature.
+\end{steps}
+
+\begin{steps}{Algorithm 9: $\mathrm{DS.Verify}(pk,msg,sig)$}
+\item If $|sig|\ne49{,}992$, return \texttt{false}.
+\item Parse $R$, $\mathit{root}$, $\mathit{pubseed}$.
+\item Recompute the digest and split into FORS indices, tree index, and
+  leaf.
+\item Parse the 35 FORS units and compute the FORS public key.
+\item For each layer, require the eight reserved bytes to be zero.
+\item Climb all 17 XMSS layers in order.
+\item Return $\mathrm{ct\_eq}(\mathit{root}',\mathit{root})=1$.
+\end{steps}
+
+\subsection{Encoding}
+
+\[
+ \mathit{sig}=R(32)\concat
+ \mathrm{FORS}_{35}\concat\mathrm{layer}_0\concat\cdots
+ \concat\mathrm{layer}_{16}.
+\]
+Each FORS unit is $32+9\cdot32=320$ bytes.  Each layer is
+\[
+ \mathrm{zero}(8)\concat\mathrm{WOTS}(67\cdot32)
+ \concat\mathrm{auth}(4\cdot32)=2280
+\]
+bytes.  The total is $32+35\cdot320+17\cdot2280=49{,}992$.
+
+\subsection{DS 2.0.1 revision}
+
+Relative to DS 2.0.0, revision 2.0.1 changes exactly two wire-visible
+items:
+
+\begin{enumerate}[leftmargin=*]
+\item $\PRF$ prefixes its input with $01$; $F$ prefixes its input with
+  $02$.
+\item The WOTS+ L-tree promotes an unpaired final node unchanged
+  instead of hashing it with itself.
+\end{enumerate}
+
+The first change removes the 64-byte structural collision between
+$\PRF$ and $F$ inputs.  The second follows the FIPS 205 odd-node rule
+and changes every WOTS+ L-tree root, every XMSS root, and every
+signature.  The frozen file is \texttt{kats-ds/v2.0.1.txt}.  The
+v2.0.0 DS vector file remains historical.
+
+%======================================================================
+\section{Domain registry}
+\label{sec:domains}
+
+\begin{longtable}{@{}lll@{}}
+\caption{Domain registry.  Every active string is listed; the
+\texttt{-init}/\texttt{-out} suffixes are CA-PRF mechanism, not
+separate rows.}\label{tab:domains}\\
+\toprule
+Domain & Construction & Purpose \\
+\midrule
+\endhead
+\texttt{HYP-G/v07/seed-a} & CA-PRF(seed, d, 32) & KEM $\mathit{seed}_A$ \\
+\texttt{HYP-G/v07/sec-s} & CA-PRF(seed, d, 512) & KEM secret $s$ \\
+\texttt{HYP-G/v07/sec-e} & CA-PRF(seed, d, 512) & KEM error $e$ \\
+\texttt{HYP-G/v07/poly-a} & CA-PRF(seed$_A$, d, 6144) & matrix $A$ \\
+\texttt{HYP-G/v07/rand-r} & CA-PRF(rseed, d, 512) & FO $r$ \\
+\texttt{HYP-G/v07/rand-e1} & CA-PRF(rseed, d, 512) & FO $e_1$ \\
+\texttt{HYP-G/v07/rand-e2} & CA-PRF(rseed, d, 128) & FO $e_2$ \\
+\texttt{HYP-G/v07/fake} & CA-PRF(seed, d, 32) & rejection key \\
+\texttt{HYP-G/v07/r-seed} & BLAKE3(m$\concat$pk$\concat$d) & FO seed \\
+\texttt{HYP-G/v07/ss} & XOF(d$\concat$m$\concat$ct$\concat$H(pk),32) & accepted secret \\
+\texttt{HYP-G/v07/reject} & XOF(d$\concat$fake$\concat$ct,32) & rejected secret \\
+\texttt{HYP-G/v07/symm-enc} & BLAKE3 derive\_key & AEAD enc subkey \\
+\texttt{HYP-G/v07/symm-mac} & BLAKE3 derive\_key & AEAD MAC subkey \\
+\texttt{HYP-G/v07/ds-addrnd} & CA-PRF(prf, d, 64) & randomizer stream \\
+\texttt{HYP-G/v07/ds-msghash} & digest suffix & digest separation \\
+\texttt{HYP-G/v07/ds-pubseed} & CA-PRF(esk, d, 32) & public hash key \\
+\texttt{HYP-G/v07/ds-prf} & CA-PRF(esk, d, 32) & randomizer seed \\
+\texttt{HYP-G/v07/kat} & hash KAT only & never protocol use \\
+\bottomrule
+\end{longtable}
+
+The CA-PRF mechanism appends \texttt{"-init"} and \texttt{"-out"} to a
+domain; those suffixes are not separate registry rows.  The retired
+draft strings \texttt{ds-fors}, \texttt{ds-wots}, and \texttt{ds-tree}
+are not used.
+
+%======================================================================
+\section{API contracts}
+\label{sec:api}
+
+\subsection{KEM}
+
+\begin{verbatim}
+keygen(seed: &[u8; 32]) -> (PublicKey, SecretKey)
+encaps(pk: &PublicKey, coins: &[u8; 32])
+    -> (Ciphertext, SharedSecret)
+decaps(sk: &SecretKey, ct: &Ciphertext) -> SharedSecret
+\end{verbatim}
+\texttt{decaps} never fails; an invalid ciphertext returns the
+pseudorandom rejection secret.  \texttt{SecretKey} and
+\texttt{SharedSecret} are not \texttt{Copy}; their \texttt{Debug} is
+redacted; equality is constant-time; \texttt{Drop} best-effort
+zeroizes.
+
+\subsection{Hash and AEAD}
+
+\begin{verbatim}
+hash32, hash64, keyed32, derive32, expand, kdf, Hasher
+seal(key, nonce, ad, pt, ct, tag) -> Option<()>
+open(key, nonce, ad, ct, tag, pt) -> Option<()>
+StreamSealer::new/update/finish
+StreamOpener::new/update/finish
+\end{verbatim}
+One-shot \texttt{open} leaves the plaintext buffer untouched on
+authentication failure.  Streaming opening is tentative until
+\texttt{finish}.
+
+\subsection{Signatures}
+
+\begin{verbatim}
+ds_keygen(esk: &[u8; 32]) -> (SigPk, SigSk)
+ds_sign(sk: &SigSk, msg: &[u8], sig: &mut [u8; 49992])
+ds_verify(pk: &SigPk, msg: &[u8], sig: &[u8]) -> bool
+mt_sign(sk: &SigSk, msg: &[u8], sig: &mut [u8; SIG_LEN])
+\end{verbatim}
+\texttt{ds\_sign} is deterministic in \texttt{(sk,msg)}.
+\texttt{ds\_verify} returns \texttt{false} on any length or encoding
+error.  \texttt{mt\_sign} is byte-identical to \texttt{ds\_sign} and
+never panics on a lost worker; the lost chunk is recomputed serially.
+
+\subsection{Secret-lifetime contract}
+
+\texttt{SecretKey}, \texttt{SharedSecret}, \texttt{SigSk},
+\texttt{PreSign}, \texttt{Key}, \texttt{State}, \texttt{Rule}, and
+\texttt{Hasher} redact \texttt{Debug} and best-effort zeroize on drop.
+This is not volatile erasure.  Accessors such as
+\texttt{seed\_copy}, \texttt{fake\_copy}, and \texttt{public\_copy}
+return caller-owned copies; the caller must erase them.
 
 %======================================================================
 \section{Known-answer vectors}
+\label{sec:kat}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+File & Bytes & SHA-256 \\
+\midrule
+\texttt{kats/v2.0.0.txt} & 28,514 &
+  \texttt{3b2dde3d...71d4b} \\
+\texttt{kats-symm/v2.0.0.txt} & 3,662 &
+  \texttt{91b7942f...4208} \\
+\texttt{kats-hash/v2.0.0.txt} & 923 &
+  \texttt{5fa77803...d9f1} \\
+\texttt{kats-ds/v2.0.1.txt} & 201,015 &
+  \texttt{e88c1bdf...c813} \\
+\midrule
+Total & 234,114 & \\
+\bottomrule
+\end{tabular}
+\caption{Frozen files.  The complete hashes are in
+\texttt{docs/parameters.md}.}
+\label{tab:kat}
+\end{table}
+
+The complete SHA-256 values are:
+
+\begin{verbatim}
+kats/v2.0.0.txt
+3b2dde3d1138c11b54a6880f50ca7b4390071ae53aa94601075f39b2af971d4b
+kats-symm/v2.0.0.txt
+91b7942ffb4a3c5da8b8b589268af7b7d1594796b428efdc7e26c567c5f04208
+kats-hash/v2.0.0.txt
+5fa778035ce2e8aa9c89345458ba4da67df4bdbe71a456cbb58026cf9341d9f1
+kats-ds/v2.0.1.txt
+e88c1bdf54e9390736cd03c1a165616d744a42c48d662880b344c7de3546c813
+\end{verbatim}
+
+The KEM file contains three deterministic tag groups
+($00$, $42$, $FF$) and a BLAKE3 \texttt{"abc"} anchor.  The Symm file
+contains five AEAD cases (empty, one-byte, 127/128-byte, and 1000-byte
+messages with varied AD).  The Hash file contains empty, \texttt{"abc"},
+and 1025-byte pattern cases plus keyed and derive-key anchors.  The DS
+file contains two cases: an empty message and a 55-byte message, each
+with a 49,992-byte signature.
+
+The x86-64 and \texttt{qemu-aarch64} musl-static KAT outputs are
+byte-identical across all 234,114 bytes.  This checks endianness and
+integer width on an emulated ARM64 target; it is not native ARM64
+validation.
+
+%======================================================================
+\section{Validation matrix}
+\label{sec:validation}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Gate & Result & Evidence class \\
+\midrule
+Debug tests & 146/146 & E1 \\
+Release tests & 146/146 & E1 \\
+MSRV 1.70 tests & 146/146 & E1 \\
+Red-team S1--S14 & 14/14 & E2 \\
+Failure sweep (release) & 20,000/20,000 & E2 \\
+Full-bit flip sweep (one ct) & 11,520/11,520 & E2 \\
+Lattice lab L1--L5 & 5/5 & E2 \\
+Cross-architecture KAT & 234,114 bytes identical & E3 \\
+Miri KEM & 9/9 & E3 \\
+Miri AEAD & 6/6 & E3 \\
+Miri DS bounds & 3/3 & E3 \\
+\bottomrule
+\end{tabular}
+\caption{Validation record.  E4 (independent audit) is absent.}
+\label{tab:validation}
+\end{table}
+
+The debug, release, and MSRV suites each contain 108 unit tests, 25 CLI
+negative integration tests, and 13 doc-tests.  Full DS signing is not
+covered by Miri.  The failure sweep and bit-flip sweep are sanity
+checks, not a formal failure bound.  The lattice lab is not a BKZ cost
+estimate.
+
+\begin{verbatim}
+cargo test --workspace --locked
+cargo test --workspace --locked --release
+cargo +1.70 test --workspace --locked
+cargo run -q -p hypg-redteam
+cargo run -q -p hypg-lattice
+cargo test -p hypg-kat --lib --locked
+\end{verbatim}
+
+%======================================================================
+\section{Conformance and change control}
+\label{sec:conformance}
+
+An implementation conforms to this document for a given revision only
+if it reproduces the active KAT files byte-for-byte and satisfies the
+specified failure and encoding rules.  A change is wire-visible if it
+alters any of:
+
+\begin{itemize}[leftmargin=*]
+\item a ring parameter, modulus, distribution, packing, compression, or
+  message encoding;
+\item a domain string, tag byte, hash input order, or ADRS field;
+\item a DS tree shape, digest split, checksum rule, or reserved byte;
+\item an AEAD key-derivation context, MAC input, or length limit;
+\item a frozen KAT file or its interpretation.
+\end{itemize}
+
+Any such change requires a new version identifier, regenerated KATs, an
+updated registry, a cross-architecture equality run, and a new
+specification revision.  A test, benchmark, or zeroization change that
+does not alter bytes is not wire-visible, but must still preserve the
+frozen output.
+
+%======================================================================
+\section{Security status and non-claims}
+\label{sec:security}
+
+This specification does not prove any security property.  The intended
+analysis depends on Module-LWE hardness, BLAKE3, ChaCha20, the exact
+FO-style transform, random-oracle behaviour, a negligible decapsulation
+failure rate, nonce uniqueness, and a bounded signing volume.
+Published FO analyses~\cite{fo99,hhk17} do not automatically cover the
+chosen accepted-secret and rejection derivations.  None of
+these is established by the implementation or by this document.
+
+The KEM has no exact published proof for its shared-secret and
+rejection derivations; the lattice-estimator has not been run; the
+signature composition has no exact UF-CMA/SUF-CMA proof or
+signing-volume bound; the AEAD has no reduction for the exact
+composition; and no external audit, formal verification, constant-time
+machine-code proof, or power/EM/fault campaign exists.  HypG is a
+research prototype and MUST NOT be deployed to protect real assets.
+
+%======================================================================
+\appendix
+\section{Constant inventory}
+\label{app:constants}
+
+\begin{longtable}{@{}ll@{}}
+\caption{Constant inventory.}\\
+\toprule
+Constant & Value \\
+\midrule
+\endhead
+\texttt{STATE\_WORDS} & 32 \\
+\texttt{STATE\_BYTES} & 256 \\
+\texttt{RULE\_WORDS} & 8 \\
+\texttt{ROUNDS} & 32 \\
+\texttt{SEED\_LEN} & 32 \\
+\texttt{FAKE\_LEN} & 32 \\
+\texttt{PK\_LEN} & 1568 \\
+\texttt{CT\_LEN} & 1440 \\
+\texttt{SK\_LEN} & 1632 \\
+\texttt{SS\_LEN} & 32 \\
+\texttt{POLY\_N} & 256 \\
+\texttt{MODULE\_K} & 4 \\
+\texttt{MOD\_Q} & 4096 \\
+\texttt{C1\_Q} & 1024 \\
+\texttt{C2\_Q} & 32 \\
+\texttt{CBD\_ETA} & 2 \\
+\texttt{POLY\_PACKED\_LEN} & 384 \\
+\texttt{C1\_PACKED\_LEN} & 320 \\
+\texttt{C2\_PACKED\_LEN} & 160 \\
+\texttt{SIG\_PK\_LEN} & 64 \\
+\texttt{SIG\_SK\_LEN} & 128 \\
+\texttt{SIG\_LEN} & 49,992 \\
+\bottomrule
+\end{longtable}
+
+\section{Byte-offset quick reference}
+\label{app:offsets}
 
 \begin{center}
-\begin{tabular}{lll}
+\small
+\begin{tabular}{@{}rrl@{}}
 \toprule
-File & Contents & Anchors \\
+Object & Offset & Field \\
 \midrule
-\texttt{kats/v2.0.0.txt} & KEM, 3 seeds & BLAKE3(``abc'') \\
-\texttt{kats-symm/v2.0.0.txt} & AEAD, 5 cases & empty/edge/1000 B \\
-\texttt{kats-ds/v2.0.0.txt} & DS, 2 seeds $\times$ 2 msgs & empty + 55 B \\
-\texttt{kats-hash/v2.0.0.txt} & hash32/64, keyed, derive & empty/abc/1025 B \\
+$sk$ & 0 & master seed (32) \\
+$sk$ & 32 & fake key (32) \\
+$sk$ & 64 & public key (1568) \\
+$sig$ & 0 & $R$ (32) \\
+$sig$ & 32 & FORS units (11,200) \\
+$sig$ & 11,232 & layer 0 (2,280) \\
+$sig$ & 47,712 & layer 16 (2,280) \\
 \bottomrule
 \end{tabular}
 \end{center}
-Byte-exact gates compare renderer output to these files; history
-(v0.4--v0.7) is retained.  Empty/abc/XOF-64 anchors were cross-checked
-against third-party BLAKE3 bindings at freeze time.
+\noindent\textbf{Selected byte offsets.}  Each layer begins with eight
+zero bytes, followed by 67 WOTS+ values and four authentication nodes.
 
-%======================================================================
-\section{API and constant-time contracts}
+\section{CLI and error codes}
+\label{app:cli}
 
-Public Rust API: \texttt{keygen/encaps/decaps} (+ key/ciphertext/secret
-types), \texttt{hash32/hash64/keyed32/derive32/expand/kdf/Hasher},
-\texttt{seal/open}, \texttt{StreamSealer/StreamOpener},
-\texttt{ds\_keygen/ds\_sign/ds\_verify}, \texttt{mt\_sign}.  All
-fallible APIs return \texttt{Option} (never panic); all loops have
-public bounds; no secret branches, indices, or early returns; lengths
-are public.  Debug renderings of key-holding types are redacted;
-\texttt{Drop} wipes reachable key material (best-effort under
-\texttt{forbid(unsafe)}).
+The operator CLI is not a production key-management tool.  Exit code
+$0$ means success; code $2$ means usage or input error; code $3$ means
+authentication failure (bad AEAD tag or bad signature).  KEM
+decapsulation of an invalid ciphertext exits $0$ because the library
+returns a pseudorandom secret rather than an error.
 
-%======================================================================
-\section{Test matrix (summary)}
+\section{Comparison with FIPS 203 and FIPS 205}
+\label{app:fips}
 
-129 tests (96 unit, 20 CLI failure-path integration, 13 doc-tests) on
-stable debug/release and MSRV 1.70; redteam S1--S14 (incl.\ full
-11520-bit malleability, 20000-trial failure sweep, 1011-case panic
-corpus, streaming games); lattice L1--L5; Miri clean on v2.0 core/symm
-(KEM re-run pending); timing medians recorded as
-per-mille smoke tests (informational).
-Full matrix: \texttt{docs/testplan.md}.
+HypG resembles ML-KEM-1024~\cite{fips203} in module rank and ring
+degree but uses $q=4096$, 10-bit $c_1$ compression, a different
+FO-style secret derivation, and BLAKE3.  It resembles SLH-DSA-256f
+(FIPS~205)~\cite{fips205} in its tree dimensions but uses BLAKE3, a
+custom 32-byte address, explicit $\PRF$/$F$ tags, deterministic
+randomizer derivation, and eight reserved bytes per layer.  It is not
+ML-KEM, not SLH-DSA, and not FIPS-conformant.  Matching dimensions is
+not a security certification.  ML-DSA (FIPS~204)~\cite{fips204} is not
+used by HypG.
 
-\medskip
-\noindent\textit{License: GNU General Public License v3.0 or later.
-Design companion: the HypG White Paper.}
+\begin{thebibliography}{99}
+
+\bibitem{rfc2119}
+S.~Bradner.
+\newblock Key words for use in RFCs to Indicate Requirement Levels.
+\newblock RFC 2119, March 1997.
+
+\bibitem{fips203}
+National Institute of Standards and Technology.
+\newblock \emph{Module-Lattice-Based Key-Encapsulation Mechanism
+Standard}. FIPS 203, August 2024.
+
+\bibitem{fips204}
+National Institute of Standards and Technology.
+\newblock \emph{Module-Lattice-Based Digital Signature Standard}.
+FIPS 204, August 2024.
+
+\bibitem{fips205}
+National Institute of Standards and Technology.
+\newblock \emph{Stateless Hash-Based Digital Signature Standard}.
+FIPS 205, August 2024.
+
+\bibitem{blake3}
+J.~O'Connor, J.-P. Aumasson, S.~Neves, and Z.~Wilcox-O'Hearn.
+\newblock BLAKE3: one function, fast everywhere.
+\newblock Technical report, 2020.
+
+\bibitem{rfc8439}
+Y.~Nir and A.~Langley.
+\newblock ChaCha20 and Poly1305 for IETF Protocols.
+\newblock RFC 8439, June 2018.
+
+\bibitem{rfc8391}
+A.~H\"ulsing, D.~Butin, S.-L. Gazdag, J.~Rijneveld, and A.~Mohaisen.
+\newblock XMSS: eXtended Merkle Signature Scheme.
+\newblock RFC 8391, May 2018.
+
+\bibitem{sphincs}
+D.~J. Bernstein, A.~H\"ulsing, S.~K\"olbl, R.~Niederhagen,
+J.~Rijneveld, and P.~Schwabe.
+\newblock The SPHINCS+ signature framework.
+\newblock In \emph{ACM CCS 2019}, pages 2129--2146, 2019.
+
+\bibitem{fo99}
+E.~Fujisaki and T.~Okamoto.
+\newblock Secure integration of asymmetric and symmetric encryption
+schemes.
+\newblock In \emph{CRYPTO 1999}, LNCS 1666, pages 537--554, 1999.
+
+\bibitem{hhk17}
+D.~Hofheinz, K.~H\"ovelmanns, and E.~Kiltz.
+\newblock A modular analysis of the Fujisaki--Okamoto transformation.
+\newblock In \emph{TCC 2017}, LNCS 10677, pages 341--371, 2017.
+
+\end{thebibliography}
 
 \end{document}

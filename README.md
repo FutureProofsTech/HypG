@@ -184,6 +184,8 @@ Start at [`docs/README.md`](docs/README.md). The main entry points:
 | [`docs/nist-alignment.md`](docs/nist-alignment.md) | NIST dimensions vs. compliance gaps |
 | [`docs/audit-prep.md`](docs/audit-prep.md) | Audit scope and open questions |
 | [`docs/deployment.md`](docs/deployment.md) | Why deployment is prohibited |
+| [`papers/whitepaper.pdf`](papers/whitepaper.pdf) | White Paper: design, architecture, and evaluation |
+| [`papers/yellowpaper.pdf`](papers/yellowpaper.pdf) | Yellow Paper: normative algorithms and wire formats |
 
 ## Non-goals
 

@@ -67,6 +67,11 @@ revision and the security-hardening pass committed as `c14169e`.
   registry, threat model, test plan, metrics, NIST gap analysis, audit
   preparation, deployment posture, estimator work order, lattice lab,
   threading, and SIMD notes.
+- White Paper and Yellow Paper rewritten as full academic technical
+  reports: formal definitions and lemmas, design and security analysis,
+  wire layouts, domain registry, API/KAT contracts, evaluation
+  methodology, related work, and explicit non-claims.  PDFs rebuilt from
+  `papers/whitepaper.tex` and `papers/yellowpaper.tex`.
 
 ### Security note
 This is still **not** an audit, a proof, or a NIST compliance claim.

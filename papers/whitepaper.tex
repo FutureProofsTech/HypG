@@ -1,290 +1,1138 @@
 \documentclass[11pt,a4paper]{article}
-\usepackage[margin=2.5cm]{geometry}
-\usepackage{amsmath,amssymb}
-\usepackage{booktabs}
-\usepackage{xcolor}
-\usepackage{hyperref}
-\hypersetup{colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black}
-\usepackage{xcolor}
 
-\title{HypG: A Post-Quantum Cryptographic Suite\\ in Safe Rust\\[0.5ex]
-\large White Paper --- Design, Architecture, and Evaluation (v2.0)}
-\author{HypG Project}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs,array,longtable,tabularx,enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,
+            linkcolor=blue!55!black,
+            citecolor=blue!55!black,
+            urlcolor=blue!55!black]{hyperref}
+\usepackage{url}
+
+\hypersetup{
+  pdftitle={HypG: A Safe-Rust Post-Quantum Cryptographic Suite},
+  pdfauthor={HypG Project},
+  pdfsubject={White Paper: design, architecture, and evaluation of the v2.0 research profile},
+  pdfkeywords={post-quantum cryptography, Module-LWE, BLAKE3, ChaCha20, FORS, WOTS+, XMSS, safe Rust}
+}
+
+\setlength{\emergencystretch}{2.5em}
+\allowdisplaybreaks
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\concat}{\,\Vert\,}
+\newcommand{\bits}{\{0,1\}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\Ring}{\mathcal{R}_q}
+\newcommand{\Hash}{\mathsf{H}}
+\newcommand{\XOF}{\mathsf{XOF}}
+\newcommand{\KDF}{\mathsf{KDF}}
+\newcommand{\PRF}{\mathsf{PRF}}
+\newcommand{\KeyGen}{\mathsf{KeyGen}}
+\newcommand{\Encaps}{\mathsf{Encaps}}
+\newcommand{\Decaps}{\mathsf{Decaps}}
+\newcommand{\Encode}{\mathsf{Encode}}
+\newcommand{\Decode}{\mathsf{Decode}}
+\newcommand{\Pack}{\mathsf{Pack}}
+\newcommand{\Unpack}{\mathsf{Unpack}}
+\newcommand{\Sign}{\mathsf{Sign}}
+\newcommand{\Verify}{\mathsf{Verify}}
+\newcommand{\negl}{\mathsf{negl}}
+\newcommand{\poly}{\mathsf{poly}}
+\newcommand{\ppt}{\mathsf{PPT}}
+\newcommand{\adv}{\mathcal{A}}
+\newcommand{\chall}{\mathcal{C}}
+\newcommand{\ro}{\mathcal{O}}
+\newcommand{\concatx}{\concat}
+
+\title{\textbf{HypG: A Safe-Rust Post-Quantum Cryptographic Suite}\\[0.5ex]
+\large White Paper --- Design, Architecture, and Evaluation of the v2.0 Research Profile\\[0.3ex]
+\normalsize (KEM v2.0; Symm/Hash v2.0; DS v2.0.1)}
+
+\author{HypG Project\\
+\small Independent research prototype}
 \date{October 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-HypG is a from-scratch post-quantum cryptographic suite written in
-100\% safe Rust with zero dependencies: a Module-LWE
-key-encapsulation mechanism, BLAKE3-based hashing, ChaCha20 /
-keyed-BLAKE3 authenticated encryption (one-shot and streaming), and
-stateless hash-based signatures.  The suite is a \emph{hardened research
-profile} (v2.0): parameters now match NIST Category-5 dimensions, every
-construction is implemented, deterministically tested, adversarially
-exercised, and fully gated in CI --- but unaudited, with unconfirmed
-bit-security, and explicitly \textbf{not for deployment}.  Matching
-NIST dimensions is not a security certification.
-This paper describes the design rationale, the architecture, the
-evaluation results, and the honest limits of what a local machine can prove.
+HypG is a from-scratch, zero-external-dependency cryptographic suite
+written in Rust with \texttt{\#![forbid(unsafe\_code)]} in every
+library.  It comprises a Module-LWE key-encapsulation mechanism, a
+portable BLAKE3 hash/XOF/keyed-hash layer, a ChaCha20 plus keyed-BLAKE3
+authenticated-encryption scheme (one-shot and streaming), and a
+stateless hash-based signature scheme.  The v2.0 profile uses module
+rank four over $\Z_{4096}[X]/(X^{256}+1)$ for the KEM and an
+SLH-DSA-256f-shaped hypertree with FORS $35\times 9$ for signatures.
+The signature wire format carries the separate \textbf{2.0.1}
+revision: explicit PRF/F domain tags and FIPS-205-style odd-node
+promotion in the WOTS+ L-tree.
+
+This paper documents the design rationale, formal construction,
+implementation discipline, controlled evaluation, and---most
+importantly---the limits of the evidence.  The recorded release has 146
+deterministic tests passing in debug, release, and on the Rust 1.70
+MSRV; four frozen KAT files totalling 234,114 bytes; a 14-suite
+adversarial harness; a 20,000-trial failure sweep; a full 11,520-bit
+sweep of one test ciphertext; Miri coverage of the KEM, AEAD, and DS bounds
+tests; and byte-identical KAT output on x86-64 and
+\texttt{qemu-aarch64}.  None of this is a security proof.  The KEM's
+exact FO-style transform is not covered by a published theorem, the
+lattice hardness of the chosen parameters has not been confirmed by an
+external estimator, the signature composition has no exact
+signing-volume bound, and there is no external audit, formal
+verification, \texttt{dudect}-grade timing study, or power/EM/fault
+campaign.  HypG v2.0 is a research prototype and must not be deployed
+to protect real assets.
 \end{abstract}
+
+\noindent\textbf{Keywords:} post-quantum cryptography; Module-LWE;
+Fujisaki--Okamoto; hash-based signatures; FORS; WOTS+; XMSS; BLAKE3;
+ChaCha20; authenticated encryption; safe Rust; reproducible evaluation.
+
+\medskip
+\noindent\textbf{Document status.} Technical report accompanying the
+v2.0 artifact.  It is not peer-reviewed, not an audit, and not a
+security certification.
 
 \tableofcontents
 \newpage
 
 %======================================================================
 \section{Introduction}
+\label{sec:intro}
 
-The arrival of cryptographically relevant quantum computers would break
-the public-key cryptography in wide use today (RSA, Diffie--Hellman,
-elliptic curves).  The post-quantum response centers on new hardness
-assumptions --- structured lattices chief among them --- and on
-conservative symmetric cryptography, which survives largely unscathed.
+Public-key cryptography deployed today is vulnerable to a
+cryptographically relevant quantum computer: Shor's algorithm solves
+integer factorisation and discrete logarithms in polynomial time.
+Symmetric primitives are less affected, but their effective security
+halves under Grover search, so a post-quantum suite must combine
+quantum-resistant public-key constructions with conservative symmetric
+cryptography and a disciplined implementation.
 
-HypG is an attempt to build a \emph{complete} post-quantum suite, not
-just one primitive: key establishment, hashing, authenticated
-encryption, and signatures, sharing a single implementation core.  It is
-written from scratch in safe Rust, with no dependencies and no
-\texttt{unsafe} code, targeting \texttt{no\_std} environments for the
-cryptographic libraries.  Version 2.0 hardens the parameter profile as a research
-prototype: functionally complete and obsessively tested, but unaudited
-and making no security claim beyond its explicitly stated position.
+HypG is an experiment in building the \emph{whole} suite rather than a
+single primitive: key establishment, hashing, authenticated encryption,
+and signatures, sharing one small implementation core.  The project
+imposes unusually strict engineering constraints: no external
+dependencies, no \texttt{unsafe} code, \texttt{no\_std} cryptographic
+libraries, fixed public loop bounds, explicit little-endian encodings,
+deterministic test vectors, and mechanically checked CI gates.
 
-\subsection{What HypG is not}
+The current release is \textbf{v2.0.0} with a \textbf{DS v2.0.1} wire
+revision.  It is a research prototype.  The documentation deliberately
+separates (i) what the code does, (ii) what the test suite establishes,
+and (iii) what would still be required for a security claim.  This
+paper follows the same separation.
 
-To avoid misunderstanding: HypG is not a standard, not a submission to
-any standardization process, not audited, and not deployable.  Its KEM
-targets NIST Category-5 dimensions with \emph{unconfirmed} bit-security.
-Its test vectors pin behavior, not security.  Section~\ref{sec:limits}
-documents these limits in full; the freeze certifies \emph{process
-completeness} --- everything checkable on a local machine is checked ---
-not security.
+\subsection{Contributions}
+
+The contributions are:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{A complete, dependency-free implementation.}  A
+  \texttt{no\_std}, no-allocation cryptographic core and four protocol
+  pillars, with all dependency edges confined to workspace path
+  dependencies and all library crates under
+  \texttt{\#![forbid(unsafe\_code)]}.
+
+\item \textbf{A precise v2.0 parameter profile.}  A rank-four
+  Module-LWE KEM at lattice dimension 1024 with a power-of-two modulus
+  $q=4096$, and an SLH-DSA-256f-shaped signature profile with
+  $n=32$, $h=68$, $d=17$, $h'=4$, FORS $(35,9)$, and WOTS+ $w=16$.
+
+\item \textbf{A documented DS 2.0.1 revision.}  Explicit one-byte
+  $\PRF$/$F$ tags remove a structural collision between the two
+  64-byte keyed-hash inputs, and odd WOTS+ L-tree nodes are promoted
+  unchanged in the FIPS 205 style.
+
+\item \textbf{An honest treatment of the CA-PRF.}  The cellular
+  automaton is presented as a branchless mixing and domain-separation
+  stage whose uniformity argument rests on the final BLAKE3 XOF, not
+  as an independently proven hardness assumption.
+
+\item \textbf{A corrected KEM correctness analysis.}  The compression
+  residuals from $c_1$ and $c_2$ are included explicitly, yielding a
+  working standard deviation of approximately 70 and a margin of
+  approximately $14.6\sigma$ against the 1024 decision boundary.  This
+  is a heuristic estimate, not a formal failure bound.
+
+\item \textbf{A byte-identical streaming AEAD.}  The streaming front
+  uses the same subkeys, MAC input, counter schedule, and tag as the
+  one-shot construction; only the scheduling differs.
+
+\item \textbf{A reproducible evaluation record.}  Frozen KAT checksums,
+  cross-architecture equality, a deterministic red-team harness, a
+  local lattice lab, Miri subsets, and a controlled release benchmark
+  are recorded with commands and machine details.
+
+\item \textbf{Explicit non-claims and an audit agenda.}  The paper names
+  the exact proof, estimator, side-channel, and operational gaps that
+  stand between the current artifact and a deployable system.
+\end{enumerate}
+
+\subsection{What this paper does not claim}
+
+This paper does \emph{not} claim that HypG is IND-CCA2 secure,
+UF-CMA/SUF-CMA secure, or a secure AEAD in the sense of a published
+reduction for its exact composition.  It does not claim NIST Category-5
+security, FIPS compliance, certification, or production readiness.  It
+does not claim constant-time execution at the machine-code level, and
+it does not claim resistance to power, electromagnetic, or fault
+attacks.  KAT vectors pin behaviour; they are not security evidence.
+
+\subsection{Organisation}
+
+Section~\ref{sec:background} reviews the relevant background.
+Section~\ref{sec:principles} states the design constraints.
+Section~\ref{sec:architecture} describes the architecture.
+Sections~\ref{sec:kem}--\ref{sec:ds} describe the four pillars.
+Section~\ref{sec:implementation} discusses implementation assurance.
+Section~\ref{sec:evaluation} records the controlled evaluation.
+Section~\ref{sec:security} analyses assumptions and open problems.
+Section~\ref{sec:validity} discusses threats to validity.
+Section~\ref{sec:related} relates HypG to prior work.
+Section~\ref{sec:roadmap} gives the path to a defensible profile.
+
+%======================================================================
+\section{Background and related work}
+\label{sec:background}
+
+\subsection{Post-quantum cryptography}
+
+The NIST post-quantum standardisation process produced ML-KEM
+(FIPS~203)~\cite{fips203}, ML-DSA (FIPS~204)~\cite{fips204}, and
+SLH-DSA (FIPS~205)~\cite{fips205}.  ML-KEM is a Module-LWE KEM;
+ML-DSA is a Module-LWE/Module-SIS signature scheme; SLH-DSA is a
+stateless hash-based signature scheme derived from
+SPHINCS+~\cite{sphincs}.  HypG does not implement any of these
+standards verbatim.  It uses the same broad mathematical families and
+some of the same dimension choices, but with different primitives,
+encodings, domain separation, and wire formats.
+
+\subsection{Module-LWE}
+
+Module-LWE generalises ring-LWE by working over $R_q^k$.  For a public
+matrix $A$ and secret/error vectors $s,e$ drawn from a small
+distribution, the public key is $b=A s+e$.  Encryption uses a fresh
+small vector $r$ and errors $e_1,e_2$:
+\[
+  c_1 = A^{T}r+e_1, \qquad
+  c_2 = \langle b,r\rangle + e_2 + \Encode(m).
+\]
+The decryption noise is $\langle e,r\rangle+e_2-\langle s,e_1\rangle$;
+correctness requires it to remain inside the decoding region.  The
+concrete hardness depends on the ring degree, module rank, modulus,
+noise distribution, and number of samples.  The community
+lattice-estimator~\cite{estimator} is the standard tool for estimating
+the cost of known attacks; it has not been run on HypG's exact
+parameters.
+
+\subsection{Hash-based signatures}
+
+SLH-DSA and SPHINCS+ combine a few-time FORS signature with a hypertree
+of XMSS/WOTS+ one-time signatures.  The hash function is tweaked by a
+public seed and an address so that every hash call is
+domain-separated.  HypG follows this architecture with BLAKE3 as the
+tweakable hash, a custom 32-byte address, and a deterministic
+randomizer.  Determinism is useful for reproducible vectors but removes
+fresh-randomness hedging; the security consequences are discussed in
+Section~\ref{sec:ds}.
+
+\subsection{Symmetric primitives}
+
+BLAKE3~\cite{blake3} is a tree-structured hash and XOF with a
+32-byte keyed mode and a reference \texttt{derive\_key} mode.
+ChaCha20~\cite{rfc8439} is a 20-round ARX stream cipher with a 96-bit
+nonce and a 32-bit block counter.  HypG uses both as designed: BLAKE3
+for hashing, expansion, key derivation, and MACs; ChaCha20 for
+confidentiality.  The AEAD is an Encrypt-then-MAC composition rather
+than a standardised AEAD algorithm.
 
 %======================================================================
 \section{Design principles}
+\label{sec:principles}
 
-Five principles survived every design review and are enforced
-mechanically in continuous integration:
+Five constraints shape every component.
 
-\begin{enumerate}
-\item \textbf{Standard primitives, used as designed.} BLAKE3 for
-hashing, ChaCha20 for encryption, Module-LWE for the KEM trapdoor,
-SLH-DSA-shaped hash-based signatures.  No novel symmetric constructions:
-proposals for a custom sponge, a novel keystream permutation, and
-truncated 16-byte tags were evaluated and \emph{rejected}, because each
-would trade oracle-validated assurance for unanalyzed novelty.
-\item \textbf{Zero attack surface from the supply chain.} Zero
-dependencies --- \texttt{cargo tree} shows workspace crates only, and
-\texttt{cargo audit} is clean.  There is nothing upstream to compromise.
-\item \textbf{Memory safety by construction.} \texttt{\#![forbid(unsafe\_code)]}
-in every library, gated by CI.  Miri (Rust's undefined-behavior
-interpreter) runs clean over the v2.0 core and symmetric crates; the
-KEM re-run is pending.
-\item \textbf{Determinism and bit-exactness.} Same inputs produce same
-outputs on x86-64 and AArch64, in debug and release builds.
-Little-endian serialization is explicit everywhere (a CI gate forbids
-endian-dependent conversions), and outputs are pinned by frozen
-known-answer test files.
-\item \textbf{Fail closed.} KEM decapsulation never errors --- forgeries
-yield a pseudorandom secret via implicit rejection.  AEAD authentication
-failures return \texttt{None} and erase tentative plaintext.  The
-operator CLI distinguishes usage errors (exit 2) from authentication
-failures (exit 3).
+\begin{enumerate}[leftmargin=*]
+\item \textbf{No external dependencies.}  Every dependency edge is a
+  workspace path dependency.  The supply-chain surface is therefore the
+  Rust toolchain and the repository itself, not a transitive crate
+  graph.  \texttt{cargo tree} is part of the release gate.
+
+\item \textbf{No \texttt{unsafe}.}  Every library crate uses
+  \texttt{\#![forbid(unsafe\_code)]}.  Arithmetic and conversion paths
+  are written to be total where possible.  The cost is scalar code and
+  best-effort, rather than volatile, zeroization.
+
+\item \textbf{\texttt{no\_std} cryptographic libraries.}  The core,
+  KEM, Symm, AEAD, DS, and hash crates do not require an allocator, a
+  filesystem, or an operating system.  Threads, files, and allocation
+  live only in \texttt{std} crates.
+
+\item \textbf{Fixed public geometry.}  Protocol loops have public
+  bounds.  Secret-dependent branches, secret-dependent array indices,
+  and secret-dependent early returns are avoided in the cryptographic
+  paths.
+
+\item \textbf{Reproducible evidence.}  Deterministic KATs, a frozen
+  checksum inventory, an adversarial harness, a lattice lab,
+  cross-architecture equality, and a recorded benchmark are part of the
+  artifact.
 \end{enumerate}
+
+These are engineering constraints, not security proofs.  In particular,
+source-level branchlessness does not imply machine-code constant-time
+execution, and safe Rust does not imply resistance to microarchitectural
+leakage.
 
 %======================================================================
 \section{Architecture}
+\label{sec:architecture}
 
-A single \texttt{no\_std} core (\texttt{hypg-core}) provides the
-cellular-automaton expander (\texttt{CA-PRF}), Module-LWE polynomial
-arithmetic, portable BLAKE3, ChaCha20, and constant-time helpers.  Four
-pillars build on it:
+\subsection{Component graph}
 
-\begin{center}
-\begin{tabular}{lll}
+The dependency graph is acyclic:
+\[
+\begin{array}{c}
+\texttt{hypg-core}\\[-1mm]
+\swarrow\ \downarrow\ \searrow\\[-1mm]
+\texttt{hypg-kem}\quad
+\texttt{hypg-symm}\to\texttt{hypg-aead}\quad
+\texttt{hypg-ds}\to\texttt{hypg-mt}
+\end{array}
+\]
+\texttt{hypg-core} supplies portable BLAKE3, ChaCha20, the CA-PRF
+expander, polynomial arithmetic over $\Ring$, and constant-time
+helpers.  \texttt{hypg-hash} is a thin API over the core hash
+functions.  \texttt{hypg-kat}, \texttt{hypg-bench},
+\texttt{hypg-redteam}, \texttt{hypg-lattice}, and \texttt{hypg-cli} are
+\texttt{std} harnesses or operator tools.
+
+\subsection{Version map}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
 \toprule
-Pillar & Crate(s) & Construction \\
+Component & Code version & Wire/spec revision & Frozen vectors \\
 \midrule
-KEM & \texttt{hypg-kem} & Module-LWE + Fujisaki--Okamoto, implicit rejection \\
-Hash & \texttt{hypg-hash} & BLAKE3 API: 32/64-byte digests, XOF, keyed, KDF \\
-AEAD & \texttt{hypg-symm}, \texttt{hypg-aead} & ChaCha20 + keyed-BLAKE3 EtM, one-shot and streaming \\
-Signatures & \texttt{hypg-ds}, \texttt{hypg-mt} & SLH-DSA-256f-shaped FORS + 17-layer XMSS hypertree \\
+Workspace & 2.0.0 & --- & --- \\
+\texttt{hypg-kem} & 2.0.0 & KEM v2.0 & \texttt{kats/v2.0.0.txt} \\
+\texttt{hypg-symm} & 2.0.0 & Symm v2.0 & \texttt{kats-symm/v2.0.0.txt} \\
+\texttt{hypg-hash} & 2.0.0 & Hash v2.0 & \texttt{kats-hash/v2.0.0.txt} \\
+\texttt{hypg-ds} & 2.0.0 & \textbf{DS v2.0.1} & \texttt{kats-ds/v2.0.1.txt} \\
 \bottomrule
 \end{tabular}
-\end{center}
+\caption{Version identity of the active artifacts.  The literal
+\texttt{HYP-G/v07/...} strings are frozen domain separators, not a
+statement that the parameter set is v0.7.}
+\label{tab:versions}
+\end{table}
 
-Five std harnesses surround the libraries (all zero-dependency):
-\texttt{hypg-kat} (deterministic vector printer + frozen files),
-\texttt{hypg-bench} (throughput + timing harness),
-\texttt{hypg-redteam} (14 adversarial suites),
-\texttt{hypg-lattice} (local lattice lab), and \texttt{hypg-cli}
-(operator tool).  Threading lives only in \texttt{hypg-mt} (a scoped-thread
-signer producing byte-identical output) --- never in the \texttt{no\_std}
-libraries, because threads are a platform capability, not a primitive.
+\subsection{Boundary decisions}
 
-\subsection{Parameters}
+Threading is deliberately excluded from the \texttt{no\_std} crates.
+\texttt{hypg-mt} uses \texttt{std::thread::scope} and owns all worker
+results; deterministic assembly makes its output byte-identical to the
+serial signer.  SIMD intrinsics are excluded by the \texttt{unsafe}
+policy and portable SIMD is not stable on the MSRV; the implementation
+is scalar and relies on the compiler only for ordinary code generation.
 
-\begin{center}
-\begin{tabular}{ll}
+%======================================================================
+\section{The Module-LWE KEM}
+\label{sec:kem}
+
+\subsection{Ring and parameters}
+
+Let
+\[
+  \Ring=\Z_q[X]/(X^{256}+1), \qquad q=2^{12}=4096,
+\]
+and let $k=4$.  Secrets and errors are drawn from $\mathrm{CBD}(2)$,
+whose coefficients lie in $\{-2,-1,0,1,2\}$ with probabilities
+$1/16,4/16,6/16,4/16,1/16$ and variance one.  The message is 32 bytes,
+encoded one bit per coefficient at spacing $q/2=2048$.  The public key
+is
+\[
+ pk=\mathit{seed}_A(32)\concat \Pack_{12}(b_0)\concat\cdots\concat
+ \Pack_{12}(b_3),
+\]
+the ciphertext is
+\[
+ ct=\Pack_{10}(\mathrm{Compress}_{10}(c_{1,0}))\concat\cdots\concat
+ \Pack_{10}(\mathrm{Compress}_{10}(c_{1,3}))
+ \concat\Pack_5(\mathrm{Compress}_5(c_2)),
+\]
+and the secret key is $sk=\mathit{seed}\concat\mathit{fake}\concat pk$.
+The byte sizes are $1568$, $1440$, $1632$, and $32$ for
+$pk,ct,sk,ss$.
+
+\subsection{Key generation and encapsulation}
+
+Key generation derives $\mathit{seed}_A$ from the master seed with the
+CA-PRF, expands a $4\times4$ matrix $A$ from it, expands $s$ and $e$
+from the master seed, and computes $b=A s+e$.  A separate CA-PRF
+domain derives the 32-byte implicit-rejection key $\mathit{fake}$.
+
+Encapsulation treats the caller-provided 32-byte \texttt{coins}
+argument as the FO message $m$:
+\[
+ \mathit{rseed}=\Hash(m\concat pk\concat\texttt{"HYP-G/v07/r-seed"}),
+\]
+then derives $(r,e_1,e_2)$ from $\mathit{rseed}$ using the
+\texttt{rand-r}, \texttt{rand-e1}, and \texttt{rand-e2} domains.  It
+computes
+\[
+ c_1=A^T r+e_1,\qquad
+ c_2=\langle b,r\rangle+e_2+\Encode(m),
+\]
+packs the ciphertext, and derives
+\[
+ ss=\XOF(\texttt{"HYP-G/v07/ss"}\concat m\concat ct\concat
+ \Hash(pk),32).
+\]
+
+\paragraph{API warning.}  The \texttt{coins} value is not an auxiliary
+nonce.  It is the message itself and the input to the FO randomness
+generator.  Reusing it under the same public key repeats both the
+ciphertext and the shared secret.  It must be a fresh CSPRNG output for
+every encapsulation.
+
+\subsection{Decapsulation and implicit rejection}
+
+Decapsulation unpacks and decompresses $(c_1,c_2)$, recomputes
+$s$ from the secret seed, and obtains
+\[
+ v=c_2-\langle s,c_1\rangle,\qquad m'=\Decode(v).
+\]
+It then recomputes the encapsulation randomness and the full ciphertext
+$ct'$, compares $ct'$ with the received $ct$ using a full-scan
+constant-time equality, and computes
+\[
+ ss_{\mathrm{ok}}=\XOF(\texttt{".../ss"}\concat m'\concat ct\concat
+ \Hash(pk),32), \qquad
+ ss_{\mathrm{rej}}=\XOF(\texttt{".../reject"}\concat\mathit{fake}\concat
+ ct,32).
+\]
+A branchless select returns $ss_{\mathrm{ok}}$ when the ciphertext
+matches and $ss_{\mathrm{rej}}$ otherwise.  The function never returns
+an error.  A protocol must not treat a returned 32-byte value as proof
+that the ciphertext was valid; it must confirm the shared secret through
+a subsequent authenticator or transcript binding.
+
+\subsection{Correctness}
+
+Ignoring compression, the decryption value is
+\[
+ c_2-\langle s,c_1\rangle
+ = \Encode(m)+\langle e,r\rangle+e_2-\langle s,e_1\rangle.
+\]
+Compression adds residuals $\Delta_1$ on each $c_1$ coefficient and
+$\Delta_2$ on $c_2$:
+\[
+ v'=\Encode(m)+\langle e,r\rangle+e_2-\langle s,e_1\rangle
+ +\Delta_2-\langle s,\Delta_1\rangle.
+\]
+The residuals satisfy $\Delta_1\in\{-1,0,1,2\}$ and
+$\Delta_2\in\{-63,\ldots,64\}$; over uniformly distributed coefficients
+their variances are $1.25$ and $1365.25$.  A working variance model is:
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lr@{}}
 \toprule
-KEM & $n=256$, $k=4$ (dimension 1024), $q=2^{12}$, CBD $\eta=2$, 1 bit/coefficient \\
-& $pk = 1568$ B, $ct = 1440$ B, $sk = 1632$ B, $ss = 32$ B \\
-Hash & 32/64-byte digests, arbitrary-length XOF \\
-AEAD & 32 B key, 12 B nonce, 32 B tag, $ct.len() = pt.len()$, stream $< 2^{38}$ B \\
-Signatures & 256f shape: $pk = 64$ B, $sk = 128$ B, $sig = 49992$ B \\
+Component & Variance \\
+\midrule
+$\langle e,r\rangle$ & 1024 \\
+$-\langle s,e_1\rangle$ & 1024 \\
+$e_2$ & 1 \\
+$-\langle s,\Delta_1\rangle$ & 1280 \\
+$\Delta_2$ & 1365.25 \\
+\midrule
+Total & 4694.25 \\
+Standard deviation & $\approx 68.5$ \\
 \bottomrule
 \end{tabular}
-\end{center}
+\caption{Working variance model for the KEM noise.  The independence and
+Gaussian approximations are not proven.}
+\label{tab:noise}
+\end{table}
 
-The power-of-two modulus $q = 4096$ (rather than Kyber's 3329) is a
-documented deviation enabling branchless mask-only reduction.  Version
-2.0 is a breaking wire-format change: the KEM module rank doubles and
-the signature profile moves to the 256f shape.  v1.0 vectors remain in
-the repository as historical evidence.
+Rounding up gives $\sigma\approx 70$ and a margin of
+$1024/70\approx 14.6\sigma$ against the decision boundary.  This is a
+heuristic estimate, not a formal tail bound.  The decapsulation failure
+probability has not been bounded to $2^{-128}$; the in-tree 32-trial
+unit test is a regression tripwire, not the argument.  A formal
+analysis must bound the tail of the bounded-sum distribution directly,
+and a defensible empirical study must use at least $10^6$ trials with a
+stated confidence interval.
 
-%======================================================================
-\section{Pillar designs}
+\subsection{Intended security argument and its gaps}
 
-\subsection{KEM: Module-LWE with Fujisaki--Okamoto}
+The intended argument is FO-style: Module-LWE hides $m$ for a passive
+adversary; the re-encryption check prevents ciphertext modification;
+the random-oracle derivation of $(r,e_1,e_2)$ from $(m,pk)$ prevents
+inconsistent randomness; implicit rejection removes a public validity
+oracle.  The exact construction is not a verbatim copy of a standard FO
+transform.  In particular, the accepted secret is
+$\KDF(m\concat ct\concat\Hash(pk))$ and the rejection value is
+$\KDF(\mathit{fake}\concat ct)$.  No cited theorem covers those exact
+choices, and no reduction is proved in this repository.
 
-\texttt{KeyGen} samples secret and error vectors from a caller-supplied
-seed via the \texttt{CA-PRF} expander, builds $b = A \cdot s + e$ over
-$R_q = \mathbb{Z}_q[X]/(X^{256}+1)$, and outputs
-$pk = \mathit{seed}_A \,\|\, \mathrm{pack}_{12}(b)$.
-\texttt{Encaps} derives encryption randomness deterministically from the
-message and public key (the FO $G$ oracle), and the shared secret binds
-message, ciphertext, and public-key hash.  \texttt{Decaps} re-encrypts
-and selects between the real and a fake secret in constant time
-(implicit rejection).  Decryption noise margin is analytic: $\pm 1024$
-against $\sim$60 standard deviations, confirmed by 20000/20000 clean
-round-trips at maximum load.
-
-\subsection{Hash: BLAKE3, nothing else}
-
-The hashing pillar is a thin ergonomic API over portable BLAKE3 ---
-32-byte hashes, 64-byte XOF digests (whose first 32 bytes equal the
-hash, by construction), keyed hashing, key derivation, expansion, and a
-streaming hasher proven equivalent to one-shot across split patterns.
-An earlier from-scratch Keccak was retired in favor of the standard
-primitive with official test vectors, cross-checked against
-third-party bindings at freeze time.
-
-\subsection{AEAD: Encrypt-then-MAC, one-shot and streaming}
-
-Encryption is IETF ChaCha20; authentication is keyed BLAKE3 over
-$\mathit{nonce} \,\|\, \mathit{ad} \,\|\, \mathit{ct} \,\|\,
-\mathrm{le64} \,\|\, \mathrm{le64}$ with per-operation subkeys derived
-via BLAKE3 \texttt{derive\_key}.  The streaming front uses the
-\emph{identical} byte schedule (same subkeys, same MAC input order,
-same counter sequence with cross-chunk partial-block buffering), so any
-chunking yields the same bytes as one shot --- proven by equivalence
-tests across adversarial chunkings, which is what lets the existing KAT
-vectors cover the streaming format with no new frozen files.  Notably,
-these tests caught a genuine keystream-skipping bug during development
-(counter restarted per chunk), fixed with cross-chunk block buffering.
-
-\subsection{Signatures: SLH-shaped hypertree}
-
-FORS (35 trees of 512 leaves) signs the message digest; a 17-layer
-XMSS hypertree of WOTS+ chains ($w = 16$) authenticates the FORS key;
-hedged randomness keeps signing deterministic.  Every WOTS+ chain runs
-all 15 steps with branchless selection (constant-time rule), and
-reserved padding in the 49992-byte signature is rejection-checked at
-verification.  A threaded signer parallelizes the 52 independent tree
-builds for a $\sim$3.7$\times$ speedup with byte-identical output.
+The lattice parameters have not been run through the community
+estimator.  The power-of-two modulus differs from ML-KEM-1024's 3329,
+so ML-KEM cost estimates cannot be copied.  Consequently the KEM is
+\emph{not} claimed IND-CCA2 secure; the target is conditional on the
+missing analysis.
 
 %======================================================================
-\section{Implementation posture}
+\section{The CA-PRF and hash layer}
+\label{sec:hash}
 
-\texttt{no\_std} libraries contain no allocation, no floats, no OS
-randomness, and no panicking constructs (CI bans \texttt{panic!},
-\texttt{unwrap}, and \texttt{expect} even in tests).  Callers supply all
-randomness; all loops have public bounds; secret-dependent branches and
-indices are prohibited by policy and reviewed by inspection.  Key
-material gets best-effort erasure (compiler-fenced overwrites; true
-volatile erasure would require \texttt{unsafe}, which policy forbids),
-and debug renderings of key-holding types are redacted.
+\subsection{CA-PRF construction}
+
+For a 32-byte seed $x$, domain $d$, and output length $L$:
+\[
+ \begin{aligned}
+ \mathit{init}&=\XOF(x\concat d\concat\texttt{"-init"},256),\\
+ \mathit{rule}&=\XOF(x\concat d,64),\\
+ \mathit{state}&=\mathrm{CA}^{32}(\mathit{init};\mathit{rule}),\\
+ \mathit{out}&=\XOF(d\concat\mathit{state}\concat d\concat
+ \texttt{"-out"},L).
+ \end{aligned}
+\]
+The CA is a 32-word state with a fixed hyper-graph neighborhood
+(strides 1, 5, 17), a secret 8-word rule, and 32 branchless rounds.
+All loop bounds are public and all state is stack-resident.
+
+The final BLAKE3 XOF is the security-relevant expander.  If BLAKE3 is a
+secure XOF or random oracle, the output is pseudorandom regardless of
+the CA.  The CA is therefore a design hedge and a deterministic mixing
+stage, not an independently justified hardness assumption.  This
+distinction is important: the paper does not claim that the automaton
+adds provable security on top of BLAKE3.
+
+\subsection{BLAKE3 API and framing}
+
+The hash layer exposes unkeyed BLAKE3-256, a 64-byte XOF prefix, keyed
+BLAKE3, the reference \texttt{derive\_key} construction, an expander
+$\XOF(\mathit{seed}\concat\mathit{domain})$, a KDF
+$\XOF(\mathit{domain}\concat\mathit{parts}\ldots)$, and a streaming
+hasher.  \texttt{expand} and \texttt{kdf} do not insert length
+separators; every protocol caller uses fixed-length fields or a single
+variable-length field with a distinct domain.  The KEM and CA-PRF
+callers satisfy this condition; a new caller must check it explicitly.
+
+%======================================================================
+\section{Authenticated encryption}
+\label{sec:aead}
+
+\subsection{One-shot construction}
+
+Let $K$ be a 32-byte master key and $N$ a 12-byte nonce.  Derive
+\[
+ k_e=\mathrm{DK}(\texttt{"HYP-G/v07/symm-enc"},K),\qquad
+ k_m=\mathrm{DK}(\texttt{"HYP-G/v07/symm-mac"},K).
+\]
+Encrypt $C=\mathrm{ChaCha20}(k_e,N,0,M)$ and authenticate
+\[
+ T=\mathrm{KeyedBLAKE3}(k_m,
+ N\concat AD\concat C\concat\mathrm{LE64}(|AD|)\concat
+ \mathrm{LE64}(|C|)).
+\]
+The one-shot opener recomputes the tag and performs a full-scan
+constant-time comparison before writing any plaintext.  A tag mismatch
+or length mismatch returns \texttt{None} and leaves the plaintext buffer
+untouched.
+
+The message limit is exactly $2^{38}$ bytes: $2^{32}$ ChaCha20 blocks of
+64 bytes.  Counter exhaustion fails closed rather than wrapping.  The
+nonce must be unique per $(K,\text{message})$; the construction has no
+nonce-misuse resistance.
+
+\subsection{Streaming front}
+
+The streaming sealer buffers a partial 64-byte keystream block across
+calls, feeds ciphertext bytes to a running keyed-BLAKE3 state, and
+appends the two little-endian length suffixes at \texttt{finish}.  The
+opener feeds ciphertext to the MAC while releasing tentative plaintext;
+the plaintext becomes valid only when \texttt{finish} returns
+\texttt{Some(())}.  On failure, the assembled plaintext buffer is
+zeroized.  Empty chunks, one-byte chunks, block-boundary splits, and
+1 MiB streams are tested.  The streaming output is byte-identical to
+the one-shot output for the same inputs.
+
+\subsection{Security position}
+
+The EtM structure is standard, but the exact ChaCha20 + keyed-BLAKE3
+composition is not a standardized AEAD and no reduction for this exact
+instantiation is included.  The 32-byte tag is not truncated.  The
+construction has no key-commitment guarantee; protocols requiring key
+commitment must add it.  Nonce discipline is entirely the caller's
+responsibility.
+
+%======================================================================
+\section{Hash-based signatures}
+\label{sec:ds}
+
+\subsection{Profile and keys}
+
+The signature profile is $n=32$, $h=68$, $d=17$, $h'=4$, FORS
+$(k,a)=(35,9)$, and WOTS+ $w=16$ with $\ell=67$.  The public key is
+\[
+ pk_{\mathrm{sig}}=\mathit{root}(32)\concat\mathit{pubseed}(32),
+\]
+and the secret key is
+\[
+ sk_{\mathrm{sig}}=\mathit{esk}(32)\concat\mathit{prf}(32)
+ \concat\mathit{pubseed}(32)\concat\mathit{root}(32).
+\]
+The master secret is $\mathit{esk}$.  $\mathit{pubseed}$ is derived
+from $\mathit{esk}$ with the \texttt{ds-pubseed} domain, $\mathit{prf}$
+with \texttt{ds-prf}, and the root is the top XMSS layer root at layer
+16, tree 0.
+
+\subsection{Deterministic randomizer and digest}
+
+The randomizer is
+\[
+ R=\Hash\bigl(\mathrm{CA\text{-}PRF}(\mathit{prf},
+ \texttt{"HYP-G/v07/ds-addrnd"},64)\concat\Hash(\mathit{msg})\bigr).
+\]
+There is no fresh per-signature entropy.  Signing is a deterministic
+function of $(sk,\mathit{msg})$, so repeated signing returns the same
+bytes.  This is intentional for KATs and reproducibility, but it leaks
+message equality and removes fresh-randomness fault hedging.  The scheme
+is \emph{not} described as freshly hedged.
+
+The 64-byte digest is
+\[
+ md_c=\Hash(R\concat\mathit{pubseed}\concat\mathit{root}
+ \concat\Hash(\mathit{msg})\concat\mathrm{LE32}(c)
+ \concat\texttt{"HYP-G/v07/ds-msghash"})
+\]
+for $c\in\{0,1\}$.  The first 387 bits are split into 35 nine-bit FORS
+indices, a 68-bit tree index, and a four-bit bottom leaf.  The remaining
+bits are unused.
+
+\subsection{Tweakable hash and v2.0.1 tags}
+
+All tweakable hashes are keyed BLAKE3 with $\mathit{pubseed}$:
+\[
+ \begin{aligned}
+ \PRF(\mathit{pubseed},x,A)&=\mathrm{KeyedBLAKE3}
+   (\mathit{pubseed},01\concat x\concat A),\\
+ F(\mathit{pubseed},A,x)&=\mathrm{KeyedBLAKE3}
+   (\mathit{pubseed},02\concat A\concat x),\\
+ \Hash(\mathit{pubseed},A,L,R)&=\mathrm{KeyedBLAKE3}
+   (\mathit{pubseed},A\concat L\concat R).
+ \end{aligned}
+\]
+The explicit tags are the DS 2.0.1 revision.  Before it, $\PRF$ and
+$F$ both had 64-byte inputs and could be structurally identical when a
+secret seed happened to equal the address bytes.  The tags make the
+first input byte different in every call.  The 96-byte untagged $H$
+call has a distinct arity and field order.
+
+\subsection{Trees}
+
+FORS uses 35 trees of height 9.  Each tree signs one nine-bit leaf
+index; the signature contains the selected secret leaf and its nine
+authentication nodes (320 bytes per tree).  WOTS+ maps a 32-byte message
+to 64 nibbles plus a three-digit checksum, and signs by applying a
+15-step chain; every chain executes all 15 steps with a branchless
+select so the secret digit does not control the loop trip count.  The
+L-tree compresses 67 chain ends with seven levels; an unpaired final
+node is promoted unchanged.  An XMSS layer is a height-4 Merkle tree
+over 16 WOTS+ leaves.  The hypertree stacks 17 such layers; tree
+$i$ is $\mathit{tree\_idx}\gg 4(i+1)$, the bottom leaf is the digest's
+four-bit leaf, and upper leaf indices are the low four bits of the
+child tree index.
+
+\subsection{Encoding and verification}
+
+The 49,992-byte signature is
+\[
+ R(32)\concat \mathrm{FORS}_{35}\concat
+ \mathrm{layer}_0\concat\cdots\concat\mathrm{layer}_{16}.
+\]
+Each layer is an eight-byte reserved zero field, a 67-element WOTS+
+signature, and a four-node authentication path.  Verification checks the
+exact length, rejects any nonzero reserved byte, recomputes the digest
+and FORS key, climbs all layers, and compares the resulting root with
+the public root using constant-time equality.  No field is silently
+ignored.
+
+\subsection{Security position}
+
+The composition is SLH-DSA-shaped but not FIPS 205 conformant.  It has
+no exact UF-CMA/SUF-CMA proof for its BLAKE3 instantiation, address
+layout, deterministic randomizer, or reserved-byte encoding.  FORS
+is a few-time signature: security degrades as more signatures are
+produced under one key.  The implementation enforces no signing limit
+and keeps no state.  A deployment profile would need a concrete bound on
+signatures per key and a matching multi-target analysis.  The current
+paper claims only that the implementation computes the specified bytes
+and that the deterministic vectors and tamper tests pass.
+
+%======================================================================
+\section{Implementation assurance}
+\label{sec:implementation}
+
+\subsection{Memory and allocation discipline}
+
+The cryptographic libraries use fixed-size arrays and caller-provided
+buffers.  They do not allocate, do not read the clock, do not access the
+filesystem, and do not spawn threads.  The \texttt{std} crates own all
+OS interaction.  CI greps the \texttt{no\_std} libraries for
+\texttt{Vec}, \texttt{Box}, \texttt{alloc::}, \texttt{String}, and
+\texttt{std::} and fails if any appears.
+
+\subsection{Secret lifetimes}
+
+Secret-holding types redact \texttt{Debug}, avoid \texttt{Copy} where
+duplication would be dangerous, compare in constant time where equality
+is exposed, and best-effort zeroize on \texttt{Drop}.  The types include
+the KEM secret key and shared secret, the DS secret key and pre-sign
+context, the AEAD key, the CA state and rule, the hash state, and
+polynomial buffers.  This is best-effort erasure in safe Rust: normal
+writes are followed by compiler fences and a black-box use of the
+buffer pointer, but safe Rust cannot guarantee volatile erasure.  The
+accessors \texttt{seed\_copy}, \texttt{fake\_copy}, and
+\texttt{public\_copy} return caller-owned copies that the caller must
+erase.
+
+\subsection{Constant-time posture}
+
+The implementation avoids secret-dependent branches and indices in the
+cryptographic paths: KEM decapsulation always performs re-encryption and
+both KDFs; WOTS+ chains always execute all 15 steps; tag and root
+comparisons scan all bytes; implicit-rejection selection is a byte mask.
+This is a source-level discipline, not a machine-code guarantee.
+Compiler transformations and microarchitectural effects are not
+ analysed, and no \texttt{dudect}~\cite{dudect} or power/EM/fault
+campaign has been performed.
+
+\subsection{Failure semantics}
+
+The KEM never returns an error; invalid ciphertexts yield a
+pseudorandom secret.  The one-shot AEAD returns \texttt{None} and leaves
+the output untouched on authentication failure.  The streaming opener
+marks plaintext as tentative until \texttt{finish}.  Signature
+verification returns \texttt{false} on any malformation.  The CLI uses
+exit code 2 for usage/input errors and 3 for authentication failures.
 
 %======================================================================
 \section{Evaluation}
+\label{sec:evaluation}
 
-\subsection{Correctness gates}
+\subsection{Method and evidence levels}
 
-129 tests pass on stable (debug and release) and on the MSRV 1.70
-toolchain: 96 unit, 20 CLI failure-path integration, 13 doc-tests.
-Four frozen v2.0.0 KAT files pin behavior byte-for-byte; debug and
-release outputs are identical.  Cross-architecture v2.0 re-diffing
-passed: a musl-static KAT binary under \texttt{qemu-aarch64} matched
-x86-64 byte-for-byte (234114/234114 bytes).  Miri is clean for the v2.0
-core and symmetric crates; the KEM re-run is pending.
+We use five evidence levels: E0 source inspection; E1 deterministic
+tests and KATs; E2 adversarial harnesses; E3 dynamic/portability
+analysis such as Miri and cross-architecture runs; E4 independent
+review.  The current artifact has E0--E3 evidence and no E4 evidence.
+No result below is an external audit.
 
-\subsection{Adversarial testing (S1--S14)}
+The controlled benchmark command was:
+\begin{verbatim}
+HYPG_BENCH_ITERS=8 \
+HYPG_BENCH_DS_ITERS=8 \
+HYPG_BENCH_TTEST_N=10000 \
+cargo run -q --release -p hypg-bench
+\end{verbatim}
+The machine was an Intel Core i5-14400F with 16 hardware threads and
+31 GiB RAM, running Linux x86-64 with \texttt{rustc 1.97.1}.  The
+benchmark warms up once and reports integer averages over eight
+iterations; large-message rates use three repetitions of 1 MiB.
 
-The red-team harness runs 14 suites: garbage robustness, malleability
-sweeps (all 11520 ciphertext bits flip the secret), an $8 \times 8$
-key-mismatch matrix, message extremes, FO binding, sampler statistics
-(524288 CBD coefficients, mean exactly 0), a 20000-trial failure sweep
-(zero failures), determinism, AEAD forgery sweeps, signature forgery
-sweeps, a mega-suite (burst faults, tampered keys, garbage matrices,
-pad flips, multi-sign, 1\,MiB AEAD), a 1011-case panic-freedom corpus,
-secret-key bit flips, and streaming chunk games.  All pass, including at
-maximum load in release builds.
+\subsection{Correctness and reproducibility}
 
-\subsection{Performance (Intel i5-14400F, release)}
+The debug, release, and MSRV 1.70 test suites each report
+\textbf{146 passed, 0 failed, 0 ignored}.  The breakdown is 108 unit
+tests, 25 CLI negative integration tests, and 13 doc-tests.  The
+red-team harness passes all 14 suites.  The frozen KAT inventory is:
 
-\begin{center}
-\begin{tabular}{ll}
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lrr@{}}
 \toprule
-Hash / streaming / XOF (1 MiB) & 818 / 820 / 807 MB/s \\
-ChaCha20 keystream & 754 MB/s \\
-AEAD seal / open (1 MiB) & 397 / 405 MB/s \\
-KEM keygen / encaps / decaps & 751 / 914 / 1107 $\mu$s \\
-Sign / verify & 45.7 ms / 2.25 ms (threaded sign: 12.6 ms) \\
+File & Bytes & SHA-256 (prefix) \\
+\midrule
+\texttt{kats/v2.0.0.txt} & 28,514 & \texttt{3b2dde3d...71d4b} \\
+\texttt{kats-symm/v2.0.0.txt} & 3,662 & \texttt{91b7942f...4208} \\
+\texttt{kats-hash/v2.0.0.txt} & 923 & \texttt{5fa77803...d9f1} \\
+\texttt{kats-ds/v2.0.1.txt} & 201,015 & \texttt{e88c1bdf...c813} \\
+\midrule
+Total & 234,114 & \\
 \bottomrule
 \end{tabular}
-\end{center}
+\caption{Frozen vector inventory.  The complete hashes are in
+\texttt{docs/parameters.md} and \texttt{docs/testplan.md}.}
+\label{tab:kats}
+\end{table}
 
-Interleaved valid/tampered medians are recorded as per-mille smoke
-tests (KEM 1002pm, AEAD 581pm, DS verify 998pm); informational only,
-not a proof.
+The complete SHA-256 values are:
+
+\begin{verbatim}
+kats/v2.0.0.txt
+3b2dde3d1138c11b54a6880f50ca7b4390071ae53aa94601075f39b2af971d4b
+kats-symm/v2.0.0.txt
+91b7942ffb4a3c5da8b8b589268af7b7d1594796b428efdc7e26c567c5f04208
+kats-hash/v2.0.0.txt
+5fa778035ce2e8aa9c89345458ba4da67df4bdbe71a456cbb58026cf9341d9f1
+kats-ds/v2.0.1.txt
+e88c1bdf54e9390736cd03c1a165616d744a42c48d662880b344c7de3546c813
+\end{verbatim}
+
+The x86-64 and \texttt{qemu-aarch64} static-musl KAT outputs are
+byte-identical across all 234,114 bytes.  This checks endianness,
+integer width, and the DS 2.0.1 revision on an emulated ARM64 target;
+it is not native ARM64 validation.
+
+\subsection{Adversarial testing}
+
+The deterministic red-team harness covers garbage inputs, ciphertext
+malleability, an $8\times8$ key-mismatch matrix, message extremes, FO
+binding, sampler statistics over 524,288 CBD coefficients, failure
+sweeps, determinism, AEAD forgery, DS forgery, burst faults, tampered
+public keys, padding flips, a panic sweep, secret-key bit flips, and
+streaming AEAD games.  A fresh release run with 20,000 trials reported
+20,000/20,000 clean decapsulations.  A separate full-bit run flipped all
+11,520 bit positions of a test ciphertext; every flip changed the
+shared secret.  These are regression and sanity checks, not a
+$2^{-128}$ failure proof.
+
+\subsection{Miri and portability}
+
+Miri is an interpreter for Rust's mid-level IR.  Latest recorded runs
+on the hardened commit report KEM 9/9 (13,213.79 s), AEAD 6/6
+(214.46 s), and DS bounds 3/3 (0.42 s).  Full DS signing is not run
+under Miri because the hypertree is hours-long under interpretation.
+Miri checks executed paths for some classes of undefined behaviour; it
+does not prove their absence.  The libraries also build for
+\texttt{aarch64}, \texttt{wasm32}, \texttt{s390x} (check only), and
+\texttt{thumbv7em}; KAT and red-team binaries pass under a 1 MB stack.
+
+\subsection{Performance}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+Operation & Controlled result \\
+\midrule
+KEM keygen / encaps / decaps & 795 / 931 / 1124 $\mu$s \\
+BLAKE3 hash / streaming / XOF (1 MiB) & 842 / 837 / 827 MB/s \\
+ChaCha20 XOR (1 MiB) & 773 MB/s \\
+AEAD seal / open (1 MiB) & 427 / 434 MB/s \\
+DS sign / verify & 72.009 ms / 3.725 ms \\
+Threaded DS sign (16 workers) & 18.329 ms, 3.928$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Controlled release measurements on the record machine.
+These are local point estimates, not portable guarantees.}
+\label{tab:bench}
+\end{table}
+
+The valid-versus-tampered medians were 1004 per-mille for KEM
+decapsulation, 602 per-mille for AEAD open, and 994 per-mille for DS
+verify.  The Welch t-test over 10,000 interleaved KEM samples had
+$\max |t|=0.737$.  These are timing-smoke signals, not a side-channel
+proof.
+
+\subsection{Interpretation}
+
+The evaluation establishes that the specified bytes are reproducible,
+that the tested failure paths behave as designed, that the KATs survive
+debug/release and cross-architecture comparison, and that the scalar
+implementation has usable research performance.  It does not establish
+cryptographic security, constant-time execution, or production
+readiness.
 
 %======================================================================
-\section{Limits and threat model}
-\label{sec:limits}
+\section{Security analysis and open problems}
+\label{sec:security}
 
-The following are explicitly \emph{not} claimed: confirmed bit-security
-(the lattice-estimator run is the top backlog item), side-channel
-immunity beyond a branchless timing posture (no power/EM/fault
-analysis), reduction of the \texttt{CA-PRF} heuristic (uniformity rests
-on the outer BLAKE3 in the random-oracle model), or any third-party
-review.  KAT vectors pin behavior, not security.  Abuse cases ---
-production deployment, parameter shrinking, added dependencies,
-invented symmetric modes --- are blocked by documentation, frozen
-vectors, and CI gates respectively.
+\subsection{Assumptions}
+
+The intended security argument depends on: (A1) Module-LWE hardness for
+the exact parameters; (A2) BLAKE3 as a collision-resistant hash,
+PRF/MAC, and XOF; (A3) ChaCha20 as a secure stream cipher with unique
+nonces; (A4) the exact FO-style transform having CCA security under
+A1--A2; (A5) random-oracle behaviour of the hash/KDF calls; (A6) a
+negligible decapsulation-failure probability; (A7) nonce uniqueness;
+(A8) a bounded DS signing volume; (A9) caller-protected secret storage;
+and (A10) no machine-code constant-time claim.
+
+\subsection{The exact FO variant}
+
+Standard FO analyses~\cite{fo99,hhk17} do not automatically cover the
+chosen shared-secret and rejection derivations.  A proof must adapt the
+transform, account for the full public-key binding in $G$, and bound
+the re-encryption-collision probability.  This is an open item, not a
+footnote.
+
+\subsection{The DS signing volume}
+
+FORS is few-time.  The security of the hypertree depends on how many
+messages are signed under one key and on the probability of reusing
+FORS leaves or WOTS+ keys.  The current implementation stores no state
+and enforces no limit.  A deployment profile needs a concrete bound and
+a multi-target analysis; neither exists here.
+
+\subsection{The AEAD composition}
+
+The EtM composition is structurally standard, but the exact
+ChaCha20 + keyed-BLAKE3 instantiation has no cited reduction.  Nonce
+reuse is catastrophic and caller-controlled.  No key-commitment property
+is claimed.
+
+\subsection{Side channels and fault injection}
+
+Source-level branchlessness is not a machine-code guarantee.  The
+project has no \texttt{dudect} evaluation, no power/EM laboratory, and
+no fault-injection campaign.  The deterministic DS randomizer also
+removes fresh-randomness fault hedging.  These are material limitations
+for any deployment-oriented claim.
+
+\subsection{Operational assumptions}
+
+The caller must supply a CSPRNG, protect keys in memory, ensure nonce
+uniqueness, confirm KEM secrets, bound signature volume, and provide
+protocol framing and replay protection.  The libraries provide none of
+these services.
 
 %======================================================================
-\section{Road to a security claim}
+\section{Threats to validity}
+\label{sec:validity}
 
-Four external milestones stand between v2.0 and any security claim:
-(1)~lattice-estimator confirmation with parameter review ($q = 4096$
-vs.\ $3329$); (2)~third-party cryptanalysis of the trapdoor, the
-\texttt{CA-PRF}, the EtM binding including streaming, and the DS
-composition; (3)~timing/fault evaluation; (4)~independent code audit.
-None is achievable on the development machine, by construction of the
-evidence classes involved.
+\paragraph{Construct validity.}  KATs and reproducibility checks measure
+\emph{behaviour}, not hardness.  A deterministic test can pass while the
+construction is insecure.
+
+\paragraph{Internal validity.}  The red-team harness is deterministic and
+finite.  It does not cover every input, every protocol composition, or
+every compiler transformation.  The 20,000-trial failure sweep is not a
+tail bound.
+
+\paragraph{External validity.}  Performance is measured on one CPU,
+one toolchain, and one operating system.  Cross-architecture KATs are
+emulated on ARM64; native ARM64 and s390x runtime validation are absent.
+The results do not establish portable timing behaviour.
+
+\paragraph{Conclusion validity.}  The absence of external audit,
+lattice-estimator output, formal proof, and side-channel data prevents
+any conclusion about deployable security.
+
+%======================================================================
+\section{Related work}
+\label{sec:related}
+
+ML-KEM~\cite{fips203}, ML-DSA~\cite{fips204}, and
+SLH-DSA~\cite{fips205} are the NIST standards closest to the relevant
+families.  HypG shares the Module-LWE and hypertree shapes but is not
+wire-compatible or standards-conformant.  SPHINCS+~\cite{sphincs} and
+XMSS~\cite{rfc8391} are the main references for the signature
+composition.  BLAKE3~\cite{blake3}, ChaCha20~\cite{rfc8439}, and the
+Fujisaki--Okamoto literature~\cite{fo99,hhk17} are the symmetric and
+transform references.  The lattice-estimator~\cite{estimator} is the
+required external tool for the KEM parameters.  The
+\texttt{dudect}~\cite{dudect} methodology is the minimum bar for a
+timing evaluation.  Rust's Miri~\cite{miri} is used for partial
+undefined-behaviour checking.
+
+HypG's contribution is not a new hardness assumption.  It is an
+integrated, transparent, reproducible research artifact with an
+explicit evidence boundary.
+
+%======================================================================
+\section{Road to a defensible profile}
+\label{sec:roadmap}
+
+The shortest honest path to a deployable profile is:
+
+\begin{enumerate}[leftmargin=*]
+\item Run the community lattice-estimator on the exact
+  $(n,k,q,\eta)=(256,4,4096,2)$ parameters, publish classical and
+  quantum cost tables, and compare against ML-KEM-1024 without claiming
+  equivalence.
+\item Derive an analytic decapsulation-failure bound and measure it at
+  at least $10^6$ trials.
+\item Prove or refute the exact FO-style transform, including the
+  accepted and rejected secret derivations.
+\item Prove a UF-CMA/SUF-CMA bound for the exact DS composition and
+  choose an enforced signing-volume limit.
+\item Complete a \texttt{dudect}-style timing evaluation and, if the
+  threat model requires it, power/EM/fault evaluation.
+\item Add coverage-guided fuzzing and a protocol-level misuse analysis.
+\item Commission an independent code audit and publish findings.
+\item If FIPS compliance is required, redesign around approved
+  primitives and pursue ACVP/CAVP and CMVP validation.
+\end{enumerate}
+
+Until then, HypG should remain in research, teaching, reproducibility,
+and test environments.
 
 %======================================================================
 \section{Conclusion}
+\label{sec:conclusion}
 
-HypG v2.0 delivers a complete, hardened, obsessively tested
-post-quantum suite in safe Rust --- and an honest account of what
-testing can and cannot prove.  The code, vectors, measurements, and
-gates are public and reproducible; the remaining work belongs to
-estimators, laboratories, and independent reviewers.
+HypG v2.0 is a complete, zero-external-dependency, safe-Rust
+post-quantum research suite with a documented KEM, hash layer, AEAD, and
+stateless signature scheme.  Its evaluation is unusually broad for a
+prototype: frozen KATs, cross-architecture equality, 146 tests, a
+14-suite adversarial harness, Miri subsets, and controlled performance
+measurements.  Its security claims are deliberately narrow: the
+artifact implements the specification, the tested paths behave as
+specified, and the remaining proof, estimator, side-channel, and audit
+work is named explicitly.
 
-\medskip
-\noindent\textit{License: GNU General Public License v3.0 or later.
-Companion formal specification: the HypG Yellow Paper.}
+That combination---substantial engineering evidence and an explicit
+refusal to round it up into a security claim---is the contribution of
+this paper.
+
+\appendix
+
+%======================================================================
+\section{Parameter register}
+\label{app:params}
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+Object & Value & Note \\
+\midrule
+\endhead
+KEM ring & $n=256$, $q=4096$ & $R_q=\Z_q[X]/(X^{256}+1)$ \\
+KEM rank & $k=4$ & lattice dimension 1024 \\
+KEM noise & $\mathrm{CBD}(2)$ & variance 1, support $\{-2,\ldots,2\}$ \\
+KEM sizes & $pk=1568$, $ct=1440$, $sk=1632$, $ss=32$ & bytes \\
+DS hash & $n=32$ & BLAKE3-256 \\
+DS tree & $h=68$, $d=17$, $h'=4$ & 17 XMSS layers \\
+DS FORS & $k=35$, $a=9$ & 35 trees, 512 leaves each \\
+DS WOTS+ & $w=16$, $\ell=67$ & 64 message + 3 checksum digits \\
+DS sizes & $pk=64$, $sk=128$, $sig=49992$ & bytes \\
+AEAD & key 32, nonce 12, tag 32 & bytes \\
+AEAD limit & $2^{38}$ & bytes per $(key,nonce)$ \\
+CA state & 32 words of 64 bits & 256 bytes \\
+CA rounds & 32 & fixed \\
+\bottomrule
+\end{longtable}
+
+%======================================================================
+\section{Artifact and reproducibility notes}
+\label{app:artifact}
+
+The active documentation is in \texttt{docs/}.  The frozen vectors are
+under \texttt{crates/hypg-kat/}.  The controlled benchmark command and
+machine details are in \texttt{docs/metrics.md}.  The test matrix and
+evidence levels are in \texttt{docs/testplan.md}.  The exact security
+non-claims are in \texttt{docs/threat-model.md} and
+\texttt{SECURITY.md}.
+
+The core reproducibility commands are:
+
+\begin{verbatim}
+cargo test --workspace --locked
+cargo test --workspace --locked --release
+cargo +1.70 test --workspace --locked
+cargo run -q -p hypg-redteam
+cargo run -q -p hypg-lattice
+cargo test -p hypg-kat --lib --locked
+HYPG_BENCH_ITERS=8 HYPG_BENCH_DS_ITERS=8 HYPG_BENCH_TTEST_N=10000 \
+  cargo run -q --release -p hypg-bench
+\end{verbatim}
+
+The code is licensed under GPL-3.0-or-later.  The paper sources are
+tracked in \texttt{papers/}; the PDFs are built with \texttt{pdflatex}.
+
+\begin{thebibliography}{99}
+
+\bibitem{fips203}
+National Institute of Standards and Technology.
+\newblock \emph{Module-Lattice-Based Key-Encapsulation Mechanism
+Standard}. FIPS 203, August 2024.
+
+\bibitem{fips204}
+National Institute of Standards and Technology.
+\newblock \emph{Module-Lattice-Based Digital Signature Standard}.
+FIPS 204, August 2024.
+
+\bibitem{fips205}
+National Institute of Standards and Technology.
+\newblock \emph{Stateless Hash-Based Digital Signature Standard}.
+FIPS 205, August 2024.
+
+\bibitem{blake3}
+J.~O'Connor, J.-P. Aumasson, S.~Neves, and Z.~Wilcox-O'Hearn.
+\newblock BLAKE3: one function, fast everywhere.
+\newblock Technical report, 2020.
+\newblock \url{https://github.com/BLAKE3-team/BLAKE3-specs/}.
+
+\bibitem{rfc8439}
+Y.~Nir and A.~Langley.
+\newblock ChaCha20 and Poly1305 for IETF Protocols.
+\newblock RFC 8439, June 2018.
+
+\bibitem{fo99}
+E.~Fujisaki and T.~Okamoto.
+\newblock Secure integration of asymmetric and symmetric encryption
+schemes.
+\newblock In \emph{CRYPTO 1999}, LNCS 1666, pages 537--554, 1999.
+
+\bibitem{hhk17}
+D.~Hofheinz, K.~H\"ovelmanns, and E.~Kiltz.
+\newblock A modular analysis of the Fujisaki--Okamoto transformation.
+\newblock In \emph{TCC 2017}, LNCS 10677, pages 341--371, 2017.
+
+\bibitem{sphincs}
+D.~J. Bernstein, A.~H\"ulsing, S.~K\"olbl, R.~Niederhagen,
+J.~Rijneveld, and P.~Schwabe.
+\newblock The SPHINCS+ signature framework.
+\newblock In \emph{ACM CCS 2019}, pages 2129--2146, 2019.
+
+\bibitem{rfc8391}
+A.~H\"ulsing, D.~Butin, S.-L. Gazdag, J.~Rijneveld, and A.~Mohaisen.
+\newblock XMSS: eXtended Merkle Signature Scheme.
+\newblock RFC 8391, May 2018.
+
+\bibitem{estimator}
+M.~R. Albrecht, R.~Player, and S.~Scott.
+\newblock On the concrete hardness of Learning with Errors.
+\newblock \emph{Journal of Mathematical Cryptology}, 9(3):169--203,
+2015.
+
+\bibitem{dudect}
+O.~Reparaz, J.~Balasch, and I.~Verbauwhede.
+\newblock Dude, is my code constant time?
+\newblock In \emph{DATE 2017}, pages 1697--1702, 2017.
+
+\bibitem{miri}
+The Rust Project.
+\newblock Miri: an interpreter for Rust's mid-level intermediate
+representation.
+\newblock \url{https://github.com/rust-lang/miri}.
+
+\end{thebibliography}
 
 \end{document}

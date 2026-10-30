@@ -67,6 +67,20 @@ parameter change. See [domains.md](domains.md).
 4. [deployment.md](deployment.md) — why deployment is prohibited and what
    an operational review would require.
 
+### I want the academic treatment
+
+1. [`../papers/whitepaper.pdf`](../papers/whitepaper.pdf) — White Paper:
+   design rationale, architecture, security discussion, related work,
+   evaluation methodology, threats to validity.
+2. [`../papers/yellowpaper.pdf`](../papers/yellowpaper.pdf) — Yellow
+   Paper: normative algorithms, formal definitions, wire layouts,
+   domain registry, API contracts, and KAT inventory.
+
+The LaTeX sources are [`../papers/whitepaper.tex`](../papers/whitepaper.tex)
+and [`../papers/yellowpaper.tex`](../papers/yellowpaper.tex).  The PDFs
+are rebuilt with `pdflatex`.  Both papers repeat the non-deployment and
+non-certification status; neither is an audit.
+
 ### I want to use the API
 
 1. [api.md](api.md) — public API, ownership, error semantics, CLI.
