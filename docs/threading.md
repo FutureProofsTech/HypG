@@ -1,78 +1,162 @@
-# Threading model (HypG)
+# Threading model
 
-How multithreading works here — and, by design, where it does not.
+**Status:** descriptive. Threading is a performance feature of the
+`std`-only `hypg-mt` crate. It adds no cryptographic primitive and no
+security claim.
 
-## 1. The boundary: threads are a platform capability, not a primitive
+## 1. Boundary: threads are a platform capability
 
-The `no_std` libraries (`hypg-core`, `hypg-kem`, `hypg-symm`,
-`hypg-ds`) never spawn threads: there is no scheduler, no thread-local
-storage, and no 8 MB stacks to assume on embedded targets. All library
-entry points are pure functions of their inputs (`&` in, values out),
-which is exactly what makes them parallelizable *by callers*.
+The `no_std` crates (`hypg-core`, `hypg-kem`, `hypg-symm`, `hypg-aead`,
+`hypg-ds`, `hypg-hash`) never spawn threads. They have no scheduler, no
+thread-local storage, and no assumption of an 8 MB host stack. Their
+entry points are pure functions of borrowed inputs and caller-owned
+output buffers.
 
-All threading lives in `hypg-mt` (std library crate, zero-dep):
-`std::thread::scope` only — no `rayon` (dependency policy), no manual
-`spawn` + `join` with `'static` bounds (scope lets workers borrow the
-caller's buffers, so nothing is copied and lifetimes are checked).
+All threading lives in `hypg-mt`, a zero-external-dependency `std`
+library. It uses `std::thread::scope` only:
 
-## 2. What parallelizes (DS signing)
+- no `rayon`, because external dependencies are forbidden;
+- no detached `spawn` with `'static` bounds, because scoped threads can
+  borrow the caller's key material without copying;
+- no mutexes or atomics, because workers do not share mutable state.
 
-One DS signature = digest (µs, serial) + 17 full XMSS tree builds +
-35 FORS tree builds (~90% of time, pairwise independent) + fast serial
-assembly (17 WOTS signs, climbs, serialize). The trees do not depend on
-each other — only on `(esk, pubseed, indices)` fixed by the digest —
-so any schedule computes the same bytes.
+The `no_std` libraries remain usable on embedded targets that have no
+threads.
 
-`hypg-mt::mt_sign` runs the 52 builds on scoped workers (strided
-assignment: worker `w` takes units `w, w+W, …`, balancing the ~100×
-XMSS/FORS cost skew), joins, then assembles in index order. The serial
-`ds_sign` is unchanged and remains canonical (KATs, `no_std` targets).
+## 2. What parallelizes
 
-## 3. Why output is byte-identical (not just "usually")
+One DS signature consists of:
 
-- Units are pure functions: `xmss_build`, `fors_sign_one` take all
-  inputs by value/borrow and return owned outputs. No shared mutable
-  state exists anywhere in the wave.
-- Workers return owned results; the join loop places each into its
-  indexed slot. Scheduling affects *timing only* — there is no code
-  path where order influences bytes.
-- Assembly (`xmss_sign_with_leaves`, `fors_verify` for roots, climbs,
-  `serialize_sig`) is the same serial code path shape as `ds_sign`.
-- Pinned by tests: `mt_matches_serial` (4 messages incl. empty/1.5 KB)
-  and `mt_stable_across_worker_counts` (1/2/64 workers → identical).
-  Change any unit and these fail before KATs even run.
+- a short serial prelude: randomizer, message digest, and digest split;
+- 17 independent XMSS tree builds;
+- 35 independent FORS tree builds;
+- a short serial assembly: WOTS signs, tree climbs, and serialization.
 
-## 4. Safety argument (why there are no data races to audit)
+The tree builds are pairwise independent: each is a pure function of
+`(pubseed, esk, tree geometry, indices)` fixed by the digest. The 52
+build units dominate signing time. On the recorded machine, one XMSS
+layer public-key build is about 3.80 ms and one FORS sign is about
+7.77 ms; the total serial sign is about 72.0 ms.
 
-- `std::thread::scope` guarantees all workers join before return; no
-  detached threads, no `'static` smuggling.
-- Each worker owns its chunk (`Vec<Unit>` moved in) and returns owned
-  results. The only shared borrows are `&` (read-only key material).
-  `Send` holds throughout because every type is owned arrays/`u32`/
-  `u64`/`u128` — no `Rc`, `RefCell`, or interior mutability exists in
-  the tree.
-- The compiler checks all of this; there is no `unsafe`, no mutex, no
-  atomics. The audit surface for concurrency is this page plus 60 lines
-  of orchestration.
+`hypg-mt::mt_sign` scatters the 52 units across scoped workers with a
+strided assignment: worker `w` takes units `w, w+W, w+2W, ...`. The
+striding balances the roughly 100× cost difference between a full XMSS
+build and a FORS unit better than a contiguous split. Workers return
+owned results; the main thread joins and assembles in unit order.
 
-## 5. Worker sizing and expectations
+Serial `ds_sign` remains canonical. It is the path used by KATs,
+`no_std` targets, and any caller that does not want a thread pool.
 
-`worker_count()` = `available_parallelism()` clamped to `[1, 64]`,
-overridable with `HYPG_MT_WORKERS` (tests pin 1/2/64). Measured on
-i5-14400F (16 threads): serial ≈ 45.7 ms → threaded ≈ 12.6 ms
-(**3.6×**). Scaling is sublinear (serial digest/assembly + wave
-quantization), and oversubscription past core count adds nothing — the
-clamp exists so a 64-core server doesn't spawn silly thread counts for
-a 52-unit wave.
+## 3. Determinism argument
 
-## 6. Deliberate non-goals
+The output bytes are independent of scheduling because:
 
-- No parallelism inside `no_std` libs (would break embedded targets).
-- No parallel KEM (ops are µs-scale; thread overhead would dominate —
-  batch across operations in your own code instead: `ds_sign`-style
-  entry points are all pure and `Send`-safe to call from scopes).
-- No parallel verification fast path needed (verify is already ~20×
-  faster than serial sign; threading it would complicate the
-  timing-independence story for single-digit-ms gains).
-- No cross-signature caching (statefulness + cache-timing surface;
-  see the optimization plan's non-goals).
+1. Each unit is a pure function of immutable inputs and returns owned
+   arrays.
+2. Workers do not write to shared mutable state.
+3. The join loop places each result into an index-derived slot; the
+   assembly then reads slots in fixed index order.
+4. The serial assembly path (`xmss_sign_with_leaves`, root
+   recomputation, climbs, `serialize_sig`) matches the serial signer.
+
+The tests pin this:
+
+- `mt_matches_serial`: four messages, including empty, short, and
+  1500-byte inputs, compared byte-for-byte with `ds_sign`.
+- `mt_stable_across_worker_counts`: 1, 2, and 64 workers produce the
+  same signature.
+
+The DS KATs are the external byte-level anchor.
+
+## 4. Safety argument
+
+- `std::thread::scope` guarantees that all scoped workers are joined
+  before the scope returns. There are no detached threads.
+- Each worker owns its `Vec` of work units and returns owned outputs.
+  Shared references are read-only.
+- Every shared type is an owned array, integer, or byte buffer. There is
+  no `Rc`, `RefCell`, `Mutex`, or interior mutability in the tree.
+- `#![forbid(unsafe_code)]` applies to `hypg-mt` as well.
+- If a worker thread is lost (a platform failure, not a cryptographic
+  error), the join loop recomputes that worker's chunk serially with the
+  same assignment. The function is total and does not panic on join
+  failure.
+- Gather buffers containing secret FORS leaves and XMSS leaves are
+  wiped before the vectors drop.
+
+The compiler enforces `Send`/`Sync` for the scoped borrows. The
+concurrency audit surface is the orchestration code in
+`crates/hypg-mt/src/lib.rs`.
+
+## 5. Worker sizing
+
+```text
+worker_count() =
+  HYPG_MT_WORKERS, if set to an integer in [1,64];
+  otherwise available_parallelism().clamp(1,64).
+```
+
+`mt_sign` further clamps to `D + FORS_K = 52` units. `mt_sign_with_workers`
+clamps to `[1,64]` and then to the unit count.
+
+The recorded benchmark used 16 workers on an i5-14400F (10 cores, 16
+threads):
+
+| Operation | Average | Speedup |
+|---|---:|---:|
+| Serial `ds_sign` | 72,009 µs | 1.000× |
+| `mt_sign` | 18,329 µs | **3.928×** |
+
+The speedup is sublinear because:
+
+- the 17 XMSS units and 35 FORS units have different costs;
+- 52 units do not divide evenly across 16 workers;
+- the digest and serial assembly are not parallelized;
+- thread creation and joining have overhead;
+- the machine has 10 physical cores, not 16 independent cores.
+
+Oversubscription past the useful unit count does not help. The clamp
+exists to avoid pathological thread counts.
+
+## 6. Memory and stack
+
+`hypg-mt` uses `Vec` for per-unit results and boxes the large hypertree
+signature. This is legitimate because it is a `std` crate. The `no_std`
+DS signer takes a caller-provided `&mut [u8; SIG_LEN]` and keeps its
+large objects on the stack; the KAT and CLI box the signature where
+appropriate.
+
+Thread stacks are platform-dependent. The implementation does not
+provide a custom stack allocator. A caller that constrains stack size
+must test its own configuration; the CI 1 MB-stack gate runs the KAT
+and red-team binaries, not arbitrary threaded workloads.
+
+## 7. Non-goals
+
+- No threading inside the `no_std` libraries.
+- No parallel KEM. KEM operations are microsecond-scale; thread overhead
+  would dominate. Batch independent KEM operations at the application
+  layer if needed.
+- No parallel verification fast path. Verification is already much
+  faster than signing, and parallel verification complicates the
+  timing story.
+- No cross-signature caching. Caching introduces state, a cache-timing
+  surface, and key-reuse hazards.
+- No persistent thread pool. Scoped threads are created per call; a pool
+  would add state and lifetime complexity.
+- No claim that threading improves side-channel resistance. It can
+  change timing and cache behaviour, which is a reason for caution, not
+  a benefit.
+
+## 8. Limitations
+
+The threaded signer is byte-identical and tested, but:
+
+- it is not constant-time;
+- it is not evaluated for cache or scheduler side channels;
+- it does not reduce the deterministic-signature privacy loss;
+- it does not enforce a signing-volume limit;
+- it is not part of the `no_std` profile;
+- its performance depends on the host scheduler and CPU topology.
+
+Use it as an optional host-side acceleration, not as a security feature.

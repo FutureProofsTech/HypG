@@ -1,10 +1,79 @@
 # Changelog (HypG)
 
-All notable changes. Format follows Keep-a-Changelog. v2.0.0 is a
-**hardened research profile** (breaking parameter change, unaudited, do
-not deploy): KEM `k = 4`, DS `HypG-DS-256f`. The `HYP-G/v07/...` domain
-strings and BLAKE3/ChaCha20 primitives are unchanged. v1.0.0 remains a
-frozen historical release with its own KAT files.
+All notable changes. Format follows Keep-a-Changelog. The workspace
+version is **2.0.0**; the active DS wire/spec revision is **2.0.1**.
+This is a **hardened research profile** (breaking parameter change,
+unaudited, do not deploy): KEM `k = 4`, DS `HypG-DS-256f`. The
+`HYP-G/v07/...` domain strings and BLAKE3/ChaCha20 primitives are
+unchanged. v1.0.0 remains a frozen historical release with its own KAT
+files.
+
+## [2.0.1] — 2026-10-30 — DS wire revision and audit hardening
+
+Workspace version remains `2.0.0`. This entry records the DS wire
+revision and the security-hardening pass committed as `c14169e`.
+
+### Changed (DS wire revision)
+- **Explicit PRF/F tags.** `PRF` now hashes
+  `0x01 || seed || ADRS`; `F` hashes `0x02 || ADRS || x`. Before this
+  revision both were 64-byte keyed-BLAKE3 inputs distinguished only by
+  field order, permitting a structural collision when a secret seed
+  happened to equal a public address.
+- **L-tree odd-node promotion.** An unpaired final WOTS+ L-tree node is
+  promoted unchanged (FIPS 205 style) instead of being hashed with
+  itself. This changes every WOTS L-tree root, XMSS root, and signature.
+- **New DS KAT.** `kats-ds/v2.0.1.txt` is the active gate; the v2.0.0
+  DS vector file remains as historical evidence. KEM/Symm/Hash wire
+  bytes are unchanged.
+
+### Security hardening
+- Secret types (`SecretKey`, `SharedSecret`, `SigSk`, `PreSign`, `Key`,
+  `State`, `Rule`, `Hasher`, `Poly`, `Poly10`, `Poly5`) now redact
+  `Debug`, avoid `Copy` where appropriate, compare in constant time where
+  equality is exposed, and best-effort zeroize on `Drop`.
+- `PreSign.esk` is private, exposed only through `PreSign::esk()`, and
+  zeroized on drop.
+- KEM keygen/encaps/decaps/derive-rand/PKE temporaries, WOTS/FORS/XMSS
+  secrets, AEAD subkeys, ChaCha/CA temporaries, and threaded gather
+  buffers are wiped.
+- Out-of-range FORS, XMSS, and hypertree indices fail closed instead of
+  wrapping or producing a zero-message signature.
+- `fold.rs` helpers rewritten as total functions; `dot` is total on
+  unequal lengths.
+- AEAD `ct_len` uses checked addition; streaming failure paths zeroize
+  the tag; the one-shot block-space boundary accepts exactly
+  `MAX_MSG_LEN`.
+- CLI flag parsing is strict: missing values, unknown extras, bad hex,
+  and wrong lengths exit `2`; authentication failures exit `3`. Added
+  25 negative integration tests.
+- Symm `seal` clears ciphertext and tag on failure; `Key` is no longer
+  `Copy`; constant-time equality and `Drop` zeroization added.
+
+### Re-recorded evidence
+- Debug, release, and MSRV 1.70 suites: **146/146** each.
+- Red-team defaults: **14/14** suites. Fresh release runs:
+  **20,000/20,000** failure trials clean; **11,520/11,520** bit positions
+  of a test ciphertext change `ss`.
+- Lattice lab: **5/5** checks.
+- KAT cross-architecture: **234,114 bytes identical** on x86-64 and
+  `qemu-aarch64`.
+- Miri: KEM **9/9** (13,213.79 s), AEAD **6/6** (214.46 s), DS bounds
+  **3/3** (0.42 s). Full DS signing is not covered.
+- Controlled benchmark: KEM keygen/encaps/decaps **795/931/1124 µs**;
+  DS sign/verify **72.009/3.725 ms**; threaded sign **18.329 ms**
+  (3.928× at 16 workers); AEAD 1 MiB seal/open **427/434 MB/s**.
+- Documentation rewritten: formal notation, parameter register, design
+  rationale, API reference, normative KEM/DS/AEAD/hash specs, domain
+  registry, threat model, test plan, metrics, NIST gap analysis, audit
+  preparation, deployment posture, estimator work order, lattice lab,
+  threading, and SIMD notes.
+
+### Security note
+This is still **not** an audit, a proof, or a NIST compliance claim.
+The KEM lattice hardness is unconfirmed; the FO variant and DS
+composition are unproven; the decapsulation failure bound, signing-volume
+analysis, `dudect`-grade timing, and power/EM/fault evaluation remain
+open.
 
 ## [2.0.0] — 2026-10-30 — hardened parameter profile
 
@@ -19,8 +88,9 @@ frozen historical release with its own KAT files.
   `h'=4`, FORS `35×9`). New `sig = 49992 B`; `pk = 64 B`,
   `sk = 128 B` unchanged. The tree index widened to `u128` (12-byte
   `ADRS` field) and serialization now uses the parameter constants.
-- **KAT re-freeze**: active files are `kats*/v2.0.0.txt`; v0.4–v0.7
-  files remain in the tree as historical evidence.
+- **KAT re-freeze**: the 2.0.0 files are `kats*/v2.0.0.txt`; v0.4–v0.7
+  files remain in the tree as historical evidence. The DS file was
+  subsequently revised to `kats-ds/v2.0.1.txt` in the 2.0.1 entry above.
 - **Workspace version** bumped to `2.0.0`; all crates and `Cargo.lock`
   updated.
 
@@ -40,9 +110,10 @@ frozen historical release with its own KAT files.
 ### Changed
 - License switched to **GPL-3.0-or-later** (`LICENSE`, workspace
   metadata); README documents the terms.
-- Red-team S2 now sweeps all 11,520 ciphertext bits; S11 checks all 17
-  DS layer pads.
-- Bench re-recorded for v2.0: KEM 751/914/1107 µs, DS sign/verify
+- Red-team S2 now sweeps all 11,520 bit positions of a test
+  ciphertext; S11 checks all 17 DS layer pads.
+- Bench re-recorded for v2.0 (initial sample; the controlled re-record
+  is in the 2.0.1 entry): KEM 751/914/1107 µs, DS sign/verify
   45.7/2.25 ms (threaded sign 12.6 ms), AEAD 397/405 MB/s, hash
   818 MB/s, ChaCha20 754 MB/s.
 

@@ -94,7 +94,7 @@ fn sk_parts(sk: &[u8; SIG_SK_LEN]) -> ([u8; N], [u8; N], [u8; N], [u8; N]) {
     (esk, prf, pubseed, root)
 }
 
-/// Hedged randomizer: `R = BLAKE3(ca_stream(prf) || BLAKE3(msg))`
+/// Deterministic randomizer: `R = BLAKE3(ca_stream(prf) || BLAKE3(msg))`
 /// (deterministic in `(sk, msg)`; streaming binds arbitrary lengths).
 fn randomizer(prf_seed: &[u8; N], msg: &[u8]) -> [u8; N] {
     let mut stream = [0u8; 64];
@@ -205,14 +205,14 @@ pub fn ds_keygen(esk: &[u8; N]) -> (SigPk, SigSk) {
     out
 }
 
-/// Signing prelude: hedged randomizer, digest split, and the secret key
+/// Signing prelude: deterministic randomizer, digest split, and the secret key
 /// material a signer needs. Pure function of `(sk, msg)`; the returned
 /// components feed independent parallel units in threaded signers.
 ///
 /// The master secret `esk` is private (accessor [`PreSign::esk`]); `Debug`
 /// is redacted and `Drop` best-effort zeroizes it.
 pub struct PreSign {
-    /// Hedged randomizer `R`.
+    /// Deterministic randomizer `R`.
     pub r: [u8; N],
     /// Master secret seed.
     esk: [u8; N],

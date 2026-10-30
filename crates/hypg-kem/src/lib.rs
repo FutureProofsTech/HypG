@@ -1,4 +1,4 @@
-//! `hypg-kem`: NIST-style IND-CCA2 KEM over `hypg-core`.
+//! `hypg-kem`: FO-style Module-LWE KEM over `hypg-core`.
 //!
 //! `no_std`, zero-dependency, `forbid(unsafe_code)`.
 //!
@@ -9,8 +9,9 @@
 //! `b = A·s + e` (`A` is `4×4` uniform from `seed_a`).
 //! Ciphertext `ct = pack10(c1_vec)(1280) || pack5(c2)(160)` with
 //! `c1 = A^T·r + e1`, `c2 = b^T·r + e2 + encode(m)` (1 bit/coeff).
-//! Fujisaki-Okamoto with implicit rejection: `r,e1,e2 = CA-PRF(m, pk)`,
-//! `ss = KDF(m || ct || pk_hash)`.
+//! FO-style transform with implicit rejection: `rseed = BLAKE3(m || pk)`,
+//! `r,e1,e2 = CA-PRF(rseed, ...)`, and `ss = KDF(m || ct || pk_hash)`.
+//! The exact transform is not covered by a published proof.
 //!
 //! The CA stays on every path: all randomness is expanded through
 //! `CA-PRF` (32 branchless CA rounds + BLAKE3 outer hash, uniform in the
@@ -18,8 +19,8 @@
 //! Module-LWE, not evaluating a public KDF.
 //!
 //! v2.0 keeps the v0.7 hash/XOF/KDF domains (`HYP-G/v07/...`) so the
-//! primitive boundary is unchanged; the lattice dimension is the only
-//! wire-format change. Parameters target NIST Category-5 *dimensions*
+//! primitive boundary is unchanged; the KEM wire change is the module
+//! dimension. Parameters target NIST Category-5 *dimensions*
 //! with power-of-two `q` (branchless mask-only reduction, no Barrett
 //! division).
 //! **Research prototype**: pending lattice-estimator confirmation + audit.

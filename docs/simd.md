@@ -1,66 +1,108 @@
-# SIMD posture (HypG)
+# SIMD and code-generation posture
 
-How this project relates to AVX2 / NEON / vector instructions —
-and why there are no intrinsics in the tree.
+**Status:** descriptive. The implementation is scalar. No SIMD
+intrinsics are used.
 
-## 1. Findings (verified on this PC, toolchain 1.97.1)
+## 1. Findings
 
-- `core::arch` intrinsics require `unsafe` to call. That alone rules
-  them out: `forbid(unsafe_code)` is the project's headline guarantee,
-  not a lint setting to work around.
-- Portable SIMD (`core::simd`) is **nightly-only** (`portable_simd`,
-  issue #86656 — confirmed `E0658` on stable 1.97.1). It cannot ship in
-  a stable-pinned workspace. Revisit when it stabilizes (would also
-  require an MSRV bump from 1.70; see §4).
-- Auto-vectorization was attempted honestly on ChaCha20 and rejected
-  with evidence: a batch-4 struct-of-arrays rewrite produced scalar
-  rounds in the emitted assembly (160 scalar `rorx` — the full round
-  count, zero `ymm` in the loop), and measured **identical throughput**
-  (~750 MiB/s) across baseline, `x86-64-v3`, and `native` builds. The
-  experiment was reverted; the scalar path stands. `x86-64-v3` does buy
-  BMI2 scalar rotates (`rorxl`), which is where the small observed
-  deltas come from — not vectorization.
+- **`core::arch` intrinsics require `unsafe`.** The workspace uses
+  `#![forbid(unsafe_code)]` in every library. Intrinsics are therefore
+  excluded by policy, not merely deferred.
+- **Portable SIMD is not available on the MSRV.** `core::simd` /
+  `portable_simd` is a nightly feature. The workspace supports stable
+  Rust 1.70, so it cannot ship a portable-SIMD implementation without
+  raising the MSRV and accepting a nightly dependency. Neither is part
+  of v2.0.
+- **No explicit vectorization is present.** BLAKE3, ChaCha20, the
+  polynomial arithmetic, and the DS hash paths are scalar code. The
+  compiler may auto-vectorize some loops, but the project does not rely
+  on it and has not measured it as a performance claim.
+- **An earlier auto-vectorization experiment did not pay off.** A
+  batch-4 struct-of-arrays ChaCha20 rewrite produced scalar rounds in
+  the emitted assembly and no measured throughput gain, so it was
+  reverted. That experiment is historical; it is not part of the current
+  build.
 
-## 2. What this means per ISA
-
-One portable scalar codebase serves every target; the compiler uses
-what each target offers. Integer SIMD would be bit-exact anywhere, but
-since nothing vectorizes, all targets equally run scalar code:
+## 2. Per-target status
 
 | Target | Status | Notes |
 |---|---|---|
-| `x86_64` (baseline) | Full gates | SSE2 baseline codegen |
-| `x86_64` + `target-cpu=x86-64-v3` | Builds, full lib tests pass | AVX2/BMI2 available; no measured gain on our kernels — opt-in only |
-| `aarch64` (NEON always on) | rlibs + musl static binary; KAT **byte-identical** under `qemu-aarch64` | NEON executes correctly; no NEON-specific source exists or is needed |
-| `thumbv7em` (32-bit ARM) | rlibs build | scalar fallback compiles; no runtime harness here |
-| `wasm32` | rlibs build | scalar; SIMD128 would need intrinsics (`unsafe`) — not pursued |
+| `x86_64` baseline | Full gates | Portable scalar build. |
+| `x86_64` + `target-cpu=x86-64-v3` | Library tests pass | AVX2/BMI2 codegen; no claim of vectorized kernels. |
+| `aarch64-unknown-linux-gnu` | Builds | Cross-compile gate. |
+| `aarch64-unknown-linux-musl` | Builds and runs under `qemu-aarch64` | KAT byte-identical to x86-64. |
+| `thumbv7em-none-eabihf` | Builds | Embedded target check. |
+| `wasm32-unknown-unknown` | Builds | Scalar; no SIMD128 path. |
+| `s390x-unknown-linux-gnu` | `cargo check` | Compile-only; no runtime sysroot. |
 
-## 3. Opt-in build flags (documented, never default)
+The cross-architecture KAT equality is evidence of portable bytes, not
+of native performance or native runtime validation on each target.
 
-Default builds target generic CPUs for portable binaries. Where a
-deployment controls its hardware, these are safe (output-identical,
-KAT-pinned) and occasionally help scalar scheduling:
+## 3. Why scalar is acceptable for this profile
+
+The project's priorities are reviewability, zero external dependencies,
+safe Rust, and `no_std` portability. A scalar implementation:
+
+- has a smaller trusted code base;
+- avoids architecture-specific code and feature detection;
+- keeps the KAT bytes identical across targets;
+- avoids the alignment and endianness pitfalls of hand-written SIMD;
+- remains compatible with the stable MSRV.
+
+The cost is throughput. The recorded BLAKE3 rate is about 842 MB/s for
+1 MiB on the test machine, ChaCha20 about 773 MB/s, and the AEAD about
+427–434 MB/s. These are acceptable for a research prototype, not a
+high-performance server target.
+
+## 4. Optional build flags
+
+Default builds target a generic CPU. A deployment that controls its
+hardware may test:
 
 ```bash
 RUSTFLAGS="-C target-cpu=x86-64-v3" cargo build --release -p hypg-cli
-RUSTFLAGS="-C target-cpu=native" cargo build --release -p hypg-cli  # build machine only
+RUSTFLAGS="-C target-cpu=native" cargo build --release -p hypg-cli
 ```
 
-CI builds and tests the `x86-64-v3` configuration to keep it from
-rotting; it asserts correctness only, never timings.
+`target-cpu=native` produces a binary tied to the build machine. Do not
+distribute it to heterogeneous hardware. These flags are not required
+for correctness, and the project makes no performance promise for them.
 
-## 4. MSRV note
+CI tests the `x86-64-v3` configuration for library correctness. It does
+not gate on timing.
 
-Stays at **1.70.0**. Nothing in this program needed newer features;
-the day portable SIMD stabilizes, adopting it forces an MSRV bump to
-whatever stable release carries it — a deliberate, versioned decision,
-not drift. Checker: `cargo +1.70 test --workspace --locked` is
-CI-gated and passed locally on 2026-10-30 (129/129); the bump, when it
-comes, must be tested, not assumed.
+## 5. MSRV
 
-## 5. What would actually move hashing throughput
+The workspace declares `rust-version = "1.70.0"`. The full 146-test
+suite passes on `cargo 1.70.0`; see [testplan.md](testplan.md). Adopting
+portable SIMD or any newer language feature would require a deliberate
+MSRV bump, new CI coverage, and updated documentation.
 
-Fewer hashes per operation (parameter-level), a different hash
-(measured and rejected in the BLAKE3 decision record), or genuine
-SIMD via one of the two blocked paths above. Scalar micro-tuning of
-the current kernels is exhausted to within noise — see `metrics.md`.
+## 6. What would improve throughput
+
+In rough order of likely impact:
+
+1. A reviewed NTT or Karatsuba path for polynomial multiplication,
+   which is the KEM bottleneck.
+2. A reviewed SIMD BLAKE3 implementation, which would require a
+   controlled `unsafe` exception or a dependency, both currently
+   forbidden.
+3. Parameter-level reductions in hash count, which are security-profile
+   changes and require a new wire version.
+4. Better scheduling of the existing tree builds in `hypg-mt`, which
+   affects only signing latency.
+
+None of these is a security improvement by itself. A faster implementation
+can be less safe if it introduces secret-dependent branches, alignment
+assumptions, or new dependencies. Any such change requires a fresh
+side-channel and correctness review.
+
+## 7. Non-claims
+
+The project does not claim:
+
+- that scalar code is constant-time;
+- that the compiler does not auto-vectorize in a secret-dependent way;
+- that `target-cpu` flags preserve timing behaviour;
+- that SIMD would be bit-identical without testing;
+- that the measured throughput generalizes to other CPUs.

@@ -2,12 +2,13 @@
 //!
 //! `no_std`, zero-dependency, `forbid(unsafe_code)`.
 //!
-//! SLH-DSA-shaped composition (FORS + hypertree of XMSS/WOTS+), all hashes
-//! via keyed BLAKE3 and `CA-PRF` addressing. See `docs/spec-ds.md`
-//! for parameters, the constant-time rule (WOTS+ chains always run all
-//! `w − 1` steps with branchless select), and the honest security position
-//! (NIST Category-5 dimensions, closed-form bounds cited, auditor must
-//! confirm; not a security certification).
+//! SLH-DSA-256f-shaped composition (FORS + hypertree of XMSS/WOTS+),
+//! all hashes via keyed BLAKE3 and `CA-PRF` addressing. See
+//! `docs/spec-ds.md` for parameters, the constant-time rule (WOTS+
+//! chains always run all `w − 1` steps with branchless select), and the
+//! honest security position: NIST Category-5 *dimensions*, no exact
+//! proof for this composition, no signing-volume bound, not a security
+//! certification. Wire/spec revision is 2.0.1; see `CHANGELOG.md`.
 
 #![no_std]
 #![forbid(unsafe_code)]
